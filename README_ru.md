@@ -428,7 +428,7 @@ gcc -DDMD_PKT_MAX_BUILD=32 nic_dmd.c ...
 
 ## Лицензия
 
-GPL v3 — NIC Native Intellect Community
+MIT License — Copyright (c) 2026 NIC — Native Intellect Community
 
 ---
 
