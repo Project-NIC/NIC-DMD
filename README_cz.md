@@ -190,15 +190,6 @@ Pro DWD meteorologická data vychází 16B uniformní int16 a 9B schema-aware na
 
 Schema-aware packing dává smysl výhradně tam, kde každý bajt rozhoduje ještě před kompresí — typicky při přenosu bez DMD nebo na extrémně omezených linkách.
 
-### Vliv velikosti paketu
-
-```
-  Pakety < 8B    → výstup větší než vstup (header overhead)
-  Pakety 8–15B   → 4–37 % úspora (slabá, záleží na datech)
-  Pakety 16–64B  → 18–62 % úspora (optimální pásmo pro DMD)
-  Pakety 128B    → ~31 % úspora (HUF dominuje, FLAG nevyhraje)
-```
-
 ### Charakter dat a dominantní metoda
 
 ```
