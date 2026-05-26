@@ -7,7 +7,7 @@
 
 # NIC DMD — Delta Markov Duda
 
-## Библиотека шифрования для встраиваемых устройств
+## Протокол сжатия для встраиваемых систем
 
 [![Лицензия: MIT](https://img.shields.io/badge/License-MIT-red.svg)](https://opensource.org/licenses/MIT)
 
