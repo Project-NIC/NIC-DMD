@@ -428,7 +428,7 @@ Buffers will be compiled at a fixed size of 32 B. For projects with a single fix
 
 ## Licence
 
-GPL v3 — NIC Native Intellect Community
+MIT License — Copyright (c) 2026 NIC — Native Intellect Community
 
 ---
 
