@@ -7,7 +7,7 @@
 
 # NIC DMD — Delta Markov Duda
 
-## Протокол сжатия для встраиваемых устройств и передачи по LoRa
+## Библиотека шифрования для встраиваемых устройств
 
 [![Лицензия: MIT](https://img.shields.io/badge/License-MIT-red.svg)](https://opensource.org/licenses/MIT)
 
