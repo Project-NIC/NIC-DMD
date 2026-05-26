@@ -1,3 +1,8 @@
+<p align="center">
+  <img src="NICDMD.svg" width="200"/>
+</p>
+
+
 ★ N.I.C. ★
 
 # NIC DMD — Delta Markov Duda
