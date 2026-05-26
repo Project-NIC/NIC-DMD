@@ -428,7 +428,7 @@ Buffery se zkompilují na pevnou velikost 32B. Pro projekty s jednou pevnou dél
 
 ## Licence
 
-GPL v3 — NIC Native Intellect Community
+MIT License — Copyright (c) 2026 NIC — Native Intellect Community
 
 ---
 
