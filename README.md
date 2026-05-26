@@ -190,15 +190,6 @@ For DWD meteorological data, 16 B uniform int16 and 9 B schema-aware packing yie
 
 Schema-aware packing makes sense only where every byte matters even before compression — typically when transmitting without DMD or on extremely constrained links.
 
-### Effect of packet size
-
-```
-  Packets < 8 B   → output larger than input (header overhead)
-  Packets 8–15 B  → 4–37 % saving (weak, data-dependent)
-  Packets 16–64 B → 18–62 % saving (optimal range for DMD)
-  Packets 128 B   → ~31 % saving (HUF dominates, FLAG cannot win)
-```
-
 ### Data character and dominant method
 
 ```
