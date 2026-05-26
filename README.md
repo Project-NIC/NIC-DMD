@@ -7,7 +7,7 @@
 
 # NIC DMD — Delta Markov Duda
 
-## Compression protocol for embedded devices and LoRa transmission
+## Compression protocol for embedded devices
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-red.svg)](https://opensource.org/licenses/MIT)
 
