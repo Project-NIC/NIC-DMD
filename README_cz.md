@@ -7,7 +7,7 @@
 
 # NIC DMD — Delta Markov Duda
 
-## Kompresní protokol pro embedded zařízení a LoRa přenos
+## Kompresní protokol pro embedded zařízení
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-red.svg)](https://opensource.org/licenses/MIT)
 
