@@ -2,6 +2,7 @@
   <img src="NICDMD.svg" width="200"/>
 </p>
 
+https://github.com/Project-NIC/NIC-DMD/blob/main/README_cs.md
 
 ★ N.I.C. ★
 
