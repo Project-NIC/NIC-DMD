@@ -1,10 +1,12 @@
+# SPDX-License-Identifier: MIT
+
 """
 NIC DMD — Utils
 ===============
 Pomocné funkce pro analýzu a výpis výsledků komprese.
 Importuj spolu s nic_dmd.py.
 
-Licence: GPL v3
+Licence: MIT
 NIC — Native Intellect Community
 https://github.com/Project-NIC
 """
