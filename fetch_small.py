@@ -21,16 +21,16 @@ Výstupy v real_data_plus_small/:
 Závislosti: pip install requests
 """
 
-import os, sys, struct, math, time, csv, zipfile, io
+import os, sys, struct, math, time, csv, zipfile, io, logging
 import requests
 from nic_dmd_utils import dmd_analyze_packets as analyze_packets, dmd_print_summary as print_summary
+# Import sjednocených funkcí
+from nic_dmd_fetch import get_session, clamp16
 
 if sys.platform == 'win32':
     sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 
-SESSION = requests.Session()
-SESSION.headers.update({'User-Agent': 'NIC-DMD-Small/1.0'})
-
+SESSION = get_session()
 OUTPUT_DIR = "real_data_plus_small"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
@@ -108,7 +108,7 @@ def safe(v, default=0.0):
     try:
         f = float(v)
         return default if math.isnan(f) or math.isinf(f) else f
-    except:
+    except Exception:
         return default
 
 def clamp(v, width, signed):
@@ -176,8 +176,9 @@ def fetch_dwd_small(station_id='00691', limit=10000):
         z = zipfile.ZipFile(io.BytesIO(r.content))
         df = [f for f in z.namelist() if f.startswith('produkt_')][0]
         content = z.read(df).decode('latin-1')
-    except Exception as e:
-        print(f"  CHYBA: {e}"); return [], []
+    except Exception:
+        logging.warning(f"Chyba při stahování/zpracování DWD pro {station_id}", exc_info=True)
+        return [], []
 
     reader = csv.reader(content.strip().split('\n'), delimiter=';')
     hdr    = [h.strip() for h in next(reader)]
@@ -208,7 +209,8 @@ def fetch_dwd_small(station_id='00691', limit=10000):
             packets.append(pack_fields(vals, SCHEMA_DWD))
             timestamps.append(row[idx_ts].strip() if idx_ts else str(len(packets)))
             if len(packets) >= limit: break
-        except: continue
+        except Exception:
+            continue
     print(f"  Načteno {len(packets)} vzorků × {sum(w for _,w,_ in SCHEMA_DWD)}B")
     return packets, timestamps
 
@@ -240,8 +242,9 @@ def fetch_forecast_small(lat, lon, name, limit=10000):
               "soil_temperature_0cm","soil_temperature_6cm"]
     try:
         h = _forecast_json(lat, lon, hourly, 16)
-    except Exception as e:
-        print(f"  CHYBA: {e}"); return [], []
+    except Exception:
+        logging.warning(f"Chyba při stahování forecast pro {name}", exc_info=True)
+        return [], []
     def g(k, d=0.0, i=0):
         v = h.get(k, [d]*999); v = v[i] if i < len(v) else d
         return safe(v, d)
@@ -273,8 +276,9 @@ def fetch_forecast_small_32b(lat, lon, name, limit=10000):
               "soil_temperature_18cm","soil_temperature_54cm"]
     try:
         h = _forecast_json(lat, lon, hourly, 16)
-    except Exception as e:
-        print(f"  CHYBA: {e}"); return [], []
+    except Exception:
+        logging.warning(f"Chyba při stahování forecast 32B pro {name}", exc_info=True)
+        return [], []
     def g(k, d=0.0, i=0):
         v = h.get(k, [d]*999); v = v[i] if i < len(v) else d
         return safe(v, d)
@@ -318,8 +322,9 @@ def fetch_aq_small(lat, lon, name, limit=10000):
     try:
         r = SESSION.get("https://air-quality-api.open-meteo.com/v1/air-quality", params=params, timeout=20)
         r.raise_for_status(); h = r.json()["hourly"]
-    except Exception as e:
-        print(f"  CHYBA: {e}"); return [], []
+    except Exception:
+        logging.warning(f"Chyba při stahování AQ pro {name}", exc_info=True)
+        return [], []
     def g(k, d=0.0, i=0):
         v = h.get(k, [d]*999); v = v[i] if i < len(v) else d
         return safe(v, d)
@@ -351,8 +356,9 @@ def fetch_usgs_small(limit=10000):
     try:
         r = SESSION.get(url, timeout=30); r.raise_for_status()
         lines = r.text.strip().split('\n')
-    except Exception as e:
-        print(f"  CHYBA: {e}"); return [], []
+    except Exception:
+        logging.warning("Chyba při stahování USGS", exc_info=True)
+        return [], []
     reader = csv.DictReader(lines)
     packets = []; timestamps = []
     for row in reader:
@@ -366,7 +372,8 @@ def fetch_usgs_small(limit=10000):
             packets.append(pack_fields(vals, SCHEMA_USGS))
             timestamps.append(row.get('time', '')[:19])
             if len(packets) >= limit: break
-        except: continue
+        except Exception:
+            continue
     print(f"  Načteno {len(packets)} vzorků × {sum(w for _,w,_ in SCHEMA_USGS)}B")
     return packets, timestamps
 
@@ -409,8 +416,9 @@ def fetch_noaa_small(station='8518750', limit=10000):
                 timestamps.append(rec.get('t', ''))
                 if len(packets) >= limit: break
             time.sleep(0.3)
-        except Exception as e:
-            print(f"  CHYBA chunk: {e}"); break
+        except Exception:
+            logging.warning(f"Chyba při stahování NOAA pro {station}", exc_info=True)
+            break
         cur = nxt + timedelta(days=1)
     print(f"  Načteno {len(packets)} vzorků × {sum(w for _,w,_ in SCHEMA_NOAA)}B")
     return packets, timestamps
@@ -427,98 +435,54 @@ if __name__ == "__main__":
     print(f"\nVýstup: {OUTPUT_DIR}/")
     all_results = {}
 
-    # DWD
-    for sid in ['00691', '05792', '01975']:
-        try:
-            pkts, ts = fetch_dwd_small(sid, LIMIT)
+    def process_fetch_result(fetch_tuple, name, schema):
+        if fetch_tuple:
+            pkts, ts = fetch_tuple
             if pkts:
-                w = sum(x for _,x,_ in SCHEMA_DWD)
-                name = f"DWD_{DWD_STATIONS[sid].split('(')[0].strip()}_{w}B"
                 r = analyze_packets(pkts, ts, name)
                 print_summary(r)
                 save_report(r, f"{name}.txt")
-                save_source(pkts, ts, f"{name}.src.txt", SCHEMA_DWD)
+                save_source(pkts, ts, f"{name}.src.txt", schema)
                 all_results[name] = r
-        except Exception as e:
-            print(f"  CHYBA: {e}")
+
+    # DWD
+    for sid in ['00691', '05792', '01975']:
+        w = sum(x for _,x,_ in SCHEMA_DWD)
+        name = f"DWD_{DWD_STATIONS[sid].split('(')[0].strip()}_{w}B"
+        process_fetch_result(fetch_dwd_small(sid, LIMIT), name, SCHEMA_DWD)
         time.sleep(1)
 
     # Forecast 13B (z původních 16B)
     for city, lat, lon in FORECAST_LOCATIONS[:4]:
-        try:
-            pkts, ts = fetch_forecast_small(lat, lon, city, LIMIT)
-            if pkts:
-                w = sum(x for _,x,_ in SCHEMA_FORECAST_16B)
-                name = f"Forecast_{city}_{w}B"
-                r = analyze_packets(pkts, ts, name)
-                print_summary(r)
-                save_report(r, f"{name}.txt")
-                save_source(pkts, ts, f"{name}.src.txt", SCHEMA_FORECAST_16B)
-                all_results[name] = r
-        except Exception as e:
-            print(f"  CHYBA: {e}")
+        w = sum(x for _,x,_ in SCHEMA_FORECAST_16B)
+        name = f"Forecast_{city}_{w}B"
+        process_fetch_result(fetch_forecast_small(lat, lon, city, LIMIT), name, SCHEMA_FORECAST_16B)
         time.sleep(0.5)
 
     # Forecast 27B (z původních 32B)
     for city, lat, lon in FORECAST_LOCATIONS[:2]:
-        try:
-            pkts, ts = fetch_forecast_small_32b(lat, lon, city, LIMIT)
-            if pkts:
-                w = sum(x for _,x,_ in SCHEMA_FORECAST_32B)
-                name = f"Forecast_{city}_{w}B_full"
-                r = analyze_packets(pkts, ts, name)
-                print_summary(r)
-                save_report(r, f"{name}.txt")
-                save_source(pkts, ts, f"{name}.src.txt", SCHEMA_FORECAST_32B)
-                all_results[name] = r
-        except Exception as e:
-            print(f"  CHYBA: {e}")
+        w = sum(x for _,x,_ in SCHEMA_FORECAST_32B)
+        name = f"Forecast_{city}_{w}B_full"
+        process_fetch_result(fetch_forecast_small_32b(lat, lon, city, LIMIT), name, SCHEMA_FORECAST_32B)
         time.sleep(0.5)
 
     # AirQuality
     for city, lat, lon in FORECAST_LOCATIONS[:3]:
-        try:
-            pkts, ts = fetch_aq_small(lat, lon, city, LIMIT)
-            if pkts:
-                w = sum(x for _,x,_ in SCHEMA_AQ)
-                name = f"AirQuality_{city}_{w}B"
-                r = analyze_packets(pkts, ts, name)
-                print_summary(r)
-                save_report(r, f"{name}.txt")
-                save_source(pkts, ts, f"{name}.src.txt", SCHEMA_AQ)
-                all_results[name] = r
-        except Exception as e:
-            print(f"  CHYBA: {e}")
+        w = sum(x for _,x,_ in SCHEMA_AQ)
+        name = f"AirQuality_{city}_{w}B"
+        process_fetch_result(fetch_aq_small(lat, lon, city, LIMIT), name, SCHEMA_AQ)
         time.sleep(0.5)
 
     # USGS
-    try:
-        pkts, ts = fetch_usgs_small(LIMIT)
-        if pkts:
-            w = sum(x for _,x,_ in SCHEMA_USGS)
-            name = f"USGS_Earthquake_{w}B"
-            r = analyze_packets(pkts, ts, name)
-            print_summary(r)
-            save_report(r, f"{name}.txt")
-            save_source(pkts, ts, f"{name}.src.txt", SCHEMA_USGS)
-            all_results[name] = r
-    except Exception as e:
-        print(f"  CHYBA USGS: {e}")
+    w = sum(x for _,x,_ in SCHEMA_USGS)
+    name = f"USGS_Earthquake_{w}B"
+    process_fetch_result(fetch_usgs_small(LIMIT), name, SCHEMA_USGS)
 
     # NOAA Tides
     for sid in ['8518750', '9414290']:
-        try:
-            pkts, ts = fetch_noaa_small(sid, LIMIT)
-            if pkts:
-                w = sum(x for _,x,_ in SCHEMA_NOAA)
-                name = f"NOAA_{NOAA_STATIONS[sid]}_{w}B"
-                r = analyze_packets(pkts, ts, name)
-                print_summary(r)
-                save_report(r, f"{name}.txt")
-                save_source(pkts, ts, f"{name}.src.txt", SCHEMA_NOAA)
-                all_results[name] = r
-        except Exception as e:
-            print(f"  CHYBA NOAA: {e}")
+        w = sum(x for _,x,_ in SCHEMA_NOAA)
+        name = f"NOAA_{NOAA_STATIONS[sid]}_{w}B"
+        process_fetch_result(fetch_noaa_small(sid, LIMIT), name, SCHEMA_NOAA)
         time.sleep(1)
 
     # Globální souhrn
