@@ -38,7 +38,9 @@ static const uint8_t DMD_PROGMEM _HUF_HI_CODE[] = {0x01, 0x03, 0x00, 0x04, 0x0D,
 static const uint8_t DMD_PROGMEM _HUF_LO_LEN[]  = {1, 4, 4, 5, 4, 5, 5, 5, 5, 5, 5, 5, 6, 6, 6, 6};
 static const uint8_t DMD_PROGMEM _HUF_LO_CODE[] = {0x01, 0x04, 0x07, 0x0B, 0x03, 0x04, 0x0A, 0x03, 0x05, 0x02, 0x00, 0x01, 0x1B, 0x1A, 0x19, 0x18};
 
-/* Pomocné funkce */
+/* -------------------------------------------------------------------------
+   Pomocné funkce pro ZigZag a Delta
+------------------------------------------------------------------------- */
 static inline uint8_t _zigzag_enc(uint8_t x) {
     int8_t s = (int8_t)x;
     return (uint8_t)((s << 1) ^ (s >> 7));
@@ -114,7 +116,204 @@ static void _delta_decode_zz(const uint8_t *data, const uint8_t *previous, uint8
     }
 }
 
-/* Inicializace kodérů a dekodérů */
+/* -------------------------------------------------------------------------
+   [P3] Nibble Huffman Kodování a Dekodování
+------------------------------------------------------------------------- */
+static int _huffman_encode(const uint8_t *data, uint8_t len, uint8_t limit, uint8_t *out) {
+    if (limit < 2) return -1;
+    uint16_t bit_buf = 0;
+    uint8_t bit_cnt = 0;
+    uint8_t out_pos = 1; 
+    uint16_t total_bits = 0;
+    uint16_t bits_cap = (limit - 1) * 8;
+
+    for (uint8_t i = 0; i < len; i++) {
+        uint8_t hi = data[i] >> 4;
+        uint8_t lo = data[i] & 0x0F;
+
+        uint8_t hi_len = DMD_READ_BYTE(&_HUF_HI_LEN[hi]);
+        uint8_t hi_code = DMD_READ_BYTE(&_HUF_HI_CODE[hi]);
+        uint8_t lo_len = DMD_READ_BYTE(&_HUF_LO_LEN[lo]);
+        uint8_t lo_code = DMD_READ_BYTE(&_HUF_LO_CODE[lo]);
+
+        total_bits += hi_len + lo_len;
+        if (total_bits > bits_cap) return -1; // early exit
+
+        bit_buf = ((bit_buf << hi_len) | hi_code) & 0xFFFF;
+        bit_cnt += hi_len;
+        while (bit_cnt >= 8) {
+            bit_cnt -= 8;
+            out[out_pos++] = (bit_buf >> bit_cnt) & 0xFF;
+        }
+        bit_buf &= (1 << bit_cnt) - 1;
+
+        bit_buf = ((bit_buf << lo_len) | lo_code) & 0xFFFF;
+        bit_cnt += lo_len;
+        while (bit_cnt >= 8) {
+            bit_cnt -= 8;
+            out[out_pos++] = (bit_buf >> bit_cnt) & 0xFF;
+        }
+        bit_buf &= (1 << bit_cnt) - 1;
+    }
+
+    if (bit_cnt > 0) {
+        out[out_pos++] = (bit_buf << (8 - bit_cnt)) & 0xFF;
+        out[0] = bit_cnt;
+    } else {
+        out[0] = 8;
+    }
+    return out_pos;
+}
+
+static int _huf_decode_nibble(const uint8_t *stream, uint8_t stream_len, uint8_t *in_pos, uint16_t *bit_buf, uint8_t *bit_cnt, uint8_t valid_last, const uint8_t *codes_tab, const uint8_t *lens_tab) {
+    while (*bit_cnt < 6 && *in_pos < stream_len) {
+        uint8_t next_byte = stream[*in_pos];
+        (*in_pos)++;
+        if (*in_pos == stream_len && valid_last < 8) {
+            *bit_buf = ((*bit_buf << valid_last) | (next_byte >> (8 - valid_last))) & 0xFFFF;
+            *bit_cnt += valid_last;
+        } else {
+            *bit_buf = ((*bit_buf << 8) | next_byte) & 0xFFFF;
+            *bit_cnt += 8;
+        }
+    }
+
+    for (uint8_t sym = 0; sym < 16; sym++) {
+        uint8_t code_len = DMD_READ_BYTE(&lens_tab[sym]);
+        if (*bit_cnt < code_len) continue;
+        
+        uint16_t mask = (1 << code_len) - 1;
+        uint16_t peek = (*bit_buf >> (*bit_cnt - code_len)) & mask;
+        if (peek == DMD_READ_BYTE(&codes_tab[sym])) {
+            *bit_cnt -= code_len;
+            *bit_buf &= (1 << *bit_cnt) - 1;
+            return sym;
+        }
+    }
+    return -1; // Chyba dekodování
+}
+
+static int _huffman_decode(const uint8_t *data, uint8_t data_len, uint8_t n_symbols, uint8_t *out) {
+    if (data_len == 0) return -1;
+    uint8_t valid_last = data[0];
+    if (valid_last == 0) valid_last = 8;
+    const uint8_t *stream = data + 1;
+    uint8_t stream_len = data_len - 1;
+
+    uint8_t in_pos = 0;
+    uint16_t bit_buf = 0;
+    uint8_t bit_cnt = 0;
+
+    for (uint8_t i = 0; i < n_symbols; i++) {
+        int hi = _huf_decode_nibble(stream, stream_len, &in_pos, &bit_buf, &bit_cnt, valid_last, _HUF_HI_CODE, _HUF_HI_LEN);
+        if (hi < 0) return -1;
+        int lo = _huf_decode_nibble(stream, stream_len, &in_pos, &bit_buf, &bit_cnt, valid_last, _HUF_LO_CODE, _HUF_LO_LEN);
+        if (lo < 0) return -1;
+        out[i] = (uint8_t)((hi << 4) | lo);
+    }
+    return 0;
+}
+
+/* -------------------------------------------------------------------------
+   [Z1][Z6][Z7][Z8] µANS Kodování a Dekodování
+------------------------------------------------------------------------- */
+static int _uans_encode(const uint8_t *data, uint8_t len, uint8_t limit, uint8_t *out) {
+    if (limit < 4) return -1;
+    uint8_t stream_limit = limit - 3;
+    uint16_t state = ANS_SCALE;
+    
+    DMD_VLA(uint8_t, stream_buf, limit); 
+    uint8_t stream_len = 0;
+
+    for (int16_t bi = len - 1; bi >= 0; bi--) {
+        uint8_t byte = data[bi];
+        for (uint8_t i = 0; i < 8; i++) {
+            uint8_t bit = byte & 1;
+            uint8_t weight = (bit == 0) ? ANS_WEIGHT_0 : ANS_WEIGHT_1;
+            byte >>= 1;
+
+            while (state >= weight * 256) {
+                stream_buf[stream_len++] = state & 0xFF;
+                state >>= 8;
+            }
+            state = (state / weight) * ANS_SCALE + ((bit == 0) ? 0 : ANS_WEIGHT_0) + (state % weight);
+        }
+        if (stream_len >= stream_limit) return -1; // early exit
+    }
+
+    uint8_t total = 3 + stream_len;
+    if (total > limit) return -1;
+
+    out[0] = len;
+    out[1] = (state >> 8) & 0xFF;
+    out[2] = state & 0xFF;
+    for (uint8_t i = 0; i < stream_len; i++) {
+        out[3 + i] = stream_buf[stream_len - 1 - i];
+    }
+    return total;
+}
+
+static int _uans_decode(const uint8_t *data, uint8_t data_len, uint8_t *out) {
+    if (data_len < 3) return -1;
+    uint8_t length = data[0];
+    uint16_t state = (data[1] << 8) | data[2];
+    uint8_t si = 3;
+
+    for (uint8_t i = 0; i < length; i++) {
+        uint8_t byte = 0;
+        for (uint8_t j = 0; j < 8; j++) {
+            uint8_t pos = state % ANS_SCALE;
+            uint8_t bit, weight, offset;
+            if (pos < ANS_WEIGHT_0) {
+                bit = 0; weight = ANS_WEIGHT_0; offset = pos;
+            } else {
+                bit = 1; weight = ANS_WEIGHT_1; offset = pos - ANS_WEIGHT_0;
+            }
+            byte = (byte << 1) | bit;
+            state = weight * (state / ANS_SCALE) + offset;
+
+            if (state < ANS_SCALE && si < data_len) {
+                state = (state << 8) | data[si++];
+            }
+        }
+        out[i] = byte;
+    }
+    return 0;
+}
+
+/* -------------------------------------------------------------------------
+   [P6][Z4] Flagování nulových bajtů
+------------------------------------------------------------------------- */
+static int _flag_encode(const uint8_t *data, uint8_t len, uint8_t limit, uint8_t *out) {
+    uint8_t map_size = (len + 7) / 8;
+    if (1 + map_size >= limit) return -1;
+
+    uint8_t nz_limit = limit - 1 - map_size;
+    uint8_t nz_count = 0;
+    uint8_t mask = 0x80;
+    uint8_t map_pos = 1;
+
+    out[0] = len;
+    memset(&out[1], 0, map_size);
+    uint8_t nz_idx = 1 + map_size;
+
+    for (uint8_t i = 0; i < len; i++) {
+        if (data[i] == 0) {
+            out[map_pos] |= mask;
+        } else {
+            if (nz_count >= nz_limit) return -1; // early exit
+            out[nz_idx++] = data[i];
+            nz_count++;
+        }
+        mask >>= 1;
+        if (mask == 0) { mask = 0x80; map_pos++; }
+    }
+    return 1 + map_size + nz_count;
+}
+
+/* -------------------------------------------------------------------------
+   Inicializace kodérů a dekodérů
+------------------------------------------------------------------------- */
 void dmd_encoder_init(dmd_encoder_t *enc, uint8_t pkt_len) {
     enc->pkt_len = pkt_len;
     enc->sample_num = 0;
@@ -126,7 +325,9 @@ void dmd_decoder_init(dmd_decoder_t *dec, uint8_t pkt_len) {
     memset(dec->previous, 0, pkt_len);
 }
 
-/* Hlavní kompresní smyčka využívající VLA pro dynamickou správu polí */
+/* -------------------------------------------------------------------------
+   Hlavní kompresní smyčka
+------------------------------------------------------------------------- */
 uint8_t dmd_compress(dmd_encoder_t *enc, const uint8_t *current, uint8_t *output) {
     uint8_t n_raw = enc->pkt_len;
     bool is_keyframe = (enc->sample_num == 0);
@@ -154,107 +355,190 @@ uint8_t dmd_compress(dmd_encoder_t *enc, const uint8_t *current, uint8_t *output
     }
 
     uint8_t best_size = n_raw;
-    uint8_t winning_method = 0; // 0=RAW, 3=FLAG (pro zjednodušenou ukázku)
+    uint8_t winning_method = 0; // 0=RAW, 1=ANS, 2=HUF, 3=FLAG, 4=FLAG+HUF
     DMD_VLA(uint8_t, payload, n_raw);
     memcpy(payload, work, n_raw);
 
-    /* (c) Zkouška metody FLAG - Rotující maska a early exit */
+    // (a) uANS
+    uint8_t zero_count = 0;
+    for (uint8_t i = 0; i < n_raw; i++) {
+        if (work[i] == 0) zero_count++;
+    }
+    if (zero_count * 100 >= n_raw * 45) {
+        DMD_VLA(uint8_t, ans_data, n_raw);
+        int ans_sz = _uans_encode(work, n_raw, best_size, ans_data);
+        if (ans_sz > 0 && ans_sz < best_size) {
+            best_size = ans_sz;
+            winning_method = 1;
+            memcpy(payload, ans_data, ans_sz);
+        }
+    }
+
+    // (b) Huffman
+    DMD_VLA(uint8_t, huf_data, n_raw);
+    int huf_sz = _huffman_encode(work, n_raw, best_size, huf_data);
+    if (huf_sz > 0 && huf_sz < best_size) {
+        best_size = huf_sz;
+        winning_method = 2;
+        memcpy(payload, huf_data, huf_sz);
+    }
+
+    // (c) FLAG
+    DMD_VLA(uint8_t, flag_data, n_raw);
+    int flag_sz = _flag_encode(work, n_raw, best_size, flag_data);
+    if (flag_sz > 0 && flag_sz < best_size) {
+        best_size = flag_sz;
+        winning_method = 3;
+        memcpy(payload, flag_data, flag_sz);
+    }
+
+    // (d) FLAG+HUF
     uint8_t map_size = (n_raw + 7) / 8;
-    if (1 + map_size < best_size) {
-        DMD_VLA(uint8_t, flag_data, n_raw);
-        uint8_t nz_limit = best_size - 1 - map_size;
-        uint8_t nz_count = 0;
+    uint8_t flag_hdr_sz = 1 + map_size;
+    if (best_size > flag_hdr_sz + 1) {
+        DMD_VLA(uint8_t, nonzero, n_raw);
+        uint8_t nz_len = 0;
+        DMD_VLA(uint8_t, temp_map, flag_hdr_sz);
+        temp_map[0] = n_raw;
+        memset(&temp_map[1], 0, map_size);
         uint8_t mask = 0x80;
         uint8_t map_pos = 1;
-        bool flag_ok = true;
 
-        flag_data[0] = n_raw;
-        memset(&flag_data[1], 0, map_size);
-
-        for (uint8_t i = 0; i < n_raw; i++) {
+        for(uint8_t i=0; i<n_raw; i++) {
             if (work[i] == 0) {
-                flag_data[map_pos] |= mask;
+                temp_map[map_pos] |= mask;
             } else {
-                if (nz_count >= nz_limit) { flag_ok = false; break; }
-                flag_data[1 + map_size + nz_count++] = work[i];
+                nonzero[nz_len++] = work[i];
             }
             mask >>= 1;
             if (mask == 0) { mask = 0x80; map_pos++; }
         }
 
-        if (flag_ok) {
-            uint8_t flag_len = 1 + map_size + nz_count;
-            if (flag_len < best_size) {
-                best_size = flag_len;
-                winning_method = 3;
-                memcpy(payload, flag_data, flag_len);
+        if (nz_len > 0) {
+            uint8_t huf_limit = best_size - flag_hdr_sz;
+            DMD_VLA(uint8_t, huf_nz, n_raw);
+            int huf_nz_sz = _huffman_encode(nonzero, nz_len, huf_limit, huf_nz);
+            if (huf_nz_sz > 0) {
+                int total = flag_hdr_sz + huf_nz_sz;
+                if (total < best_size) {
+                    best_size = total;
+                    winning_method = 4;
+                    memcpy(payload, temp_map, flag_hdr_sz);
+                    memcpy(payload + flag_hdr_sz, huf_nz, huf_nz_sz);
+                }
             }
         }
     }
 
-    /* Zestavení hlavičky */
+    // Nastavení hlavičky
+    bool use_huf = false, use_ans = false, use_flag = false;
+    if (winning_method == 1) use_ans = true;
+    else if (winning_method == 2) use_huf = true;
+    else if (winning_method == 3) use_flag = true;
+    else if (winning_method == 4) { use_huf = true; use_flag = true; }
+    else { delta_type = DELTA_NONE; } // RAW zachrana
+
     uint8_t header = enc->sample_num & 0x07;
     header |= (delta_type & 0x03) << 3;
-    if (winning_method == 3) header |= (1 << 5); // FLAG bit
+    if (use_flag) header |= (1 << 5);
+    if (use_ans)  header |= (1 << 6);
+    if (use_huf)  header |= (1 << 7);
 
     output[0] = header;
     memcpy(&output[1], payload, best_size);
 
-    /* Aktualizace stavu a vzorku */
     memcpy(enc->previous, current, n_raw);
     enc->sample_num = (enc->sample_num + 1) % DMD_KEYFRAME_EVERY;
 
     return best_size + 1;
 }
 
-/* Dekompresní funkce s tvrdým ošetřením chyb (V3, V4, K2) */
+/* -------------------------------------------------------------------------
+   Hlavní dekompresní smyčka
+------------------------------------------------------------------------- */
 int dmd_decompress(dmd_decoder_t *dec, const uint8_t *input, uint8_t in_len, uint8_t *output) {
-    if (in_len == 0) return -1; // Neplatná data / prázdný paket
-
+    if (in_len == 0) return -1;
     uint8_t n_raw = dec->pkt_len;
     uint8_t header = input[0];
-    const uint8_t *payload = &input[1];
-    
+    const uint8_t *payload = input + 1;
+    uint8_t payload_len = in_len - 1;
+
     uint8_t sample_num = header & 0x07;
-    if (sample_num == 7) {
-        return -3; // Chyba: Nepodporovaná verze protokolu
-    }
+    if (sample_num == 7) return -3;
 
     bool use_huf = (header & (1 << 7)) != 0;
     bool use_ans = (header & (1 << 6)) != 0;
-    if (use_huf || use_ans) {
-        return -2; // Chyba: Komprese Huffman a ANS nejsou v této C implementaci podporovány
-    }
-
     bool use_flag = (header & (1 << 5)) != 0;
     uint8_t delta_type = (header >> 3) & 0x03;
 
     DMD_VLA(uint8_t, work, n_raw);
 
-    if (use_flag) {
-        if (in_len <= 1) return -1; // Ochrana proti přetečení
+    if (use_huf && use_flag) {
+        if (payload_len == 0) return -1;
         uint8_t n = payload[0];
-        if (n != n_raw) return -1;  // Rozpor v délce paketu
-        
+        if (n != n_raw) return -1;
         uint8_t map_size = (n + 7) / 8;
-        if (1 + map_size > in_len - 1) return -1; // Nedostatek dat pro mapu
+        if (payload_len < 1 + map_size) return -1;
 
+        const uint8_t *flag_map = payload + 1;
+        const uint8_t *huf_part = payload + 1 + map_size;
+        uint8_t huf_part_len = payload_len - 1 - map_size;
+
+        uint8_t n_nonzero = 0;
+        uint8_t mask = 0x80;
+        uint8_t map_pos = 0;
+        for (uint8_t i = 0; i < n; i++) {
+            if (!(flag_map[map_pos] & mask)) n_nonzero++;
+            mask >>= 1;
+            if (mask == 0) { mask = 0x80; map_pos++; }
+        }
+
+        DMD_VLA(uint8_t, nonzero, n_raw);
+        if (_huffman_decode(huf_part, huf_part_len, n_nonzero, nonzero) < 0) return -1;
+
+        mask = 0x80;
+        map_pos = 0;
+        uint8_t nz_idx = 0;
+        for (uint8_t i = 0; i < n; i++) {
+            if (flag_map[map_pos] & mask) {
+                work[i] = 0;
+            } else {
+                work[i] = nonzero[nz_idx++];
+            }
+            mask >>= 1;
+            if (mask == 0) { mask = 0x80; map_pos++; }
+        }
+    } else if (use_huf) {
+        if (_huffman_decode(payload, payload_len, n_raw, work) < 0) return -1;
+    } else if (use_ans) {
+        if (_uans_decode(payload, payload_len, work) < 0) return -1;
+    } else if (use_flag) {
+        if (payload_len == 0) return -1;
+        uint8_t n = payload[0];
+        if (n != n_raw) return -1;
+        uint8_t map_size = (n + 7) / 8;
+        if (payload_len < 1 + map_size) return -1;
         uint8_t nz_idx = 1 + map_size;
         uint8_t mask = 0x80;
         uint8_t map_pos = 1;
-
         for (uint8_t i = 0; i < n; i++) {
             if (payload[map_pos] & mask) {
                 work[i] = 0;
             } else {
-                if (nz_idx >= in_len - 1) return -1; // Ochrana proti přetečení
+                if (nz_idx >= payload_len) return -1;
                 work[i] = payload[nz_idx++];
             }
             mask >>= 1;
             if (mask == 0) { mask = 0x80; map_pos++; }
         }
     } else {
-        if (in_len - 1 < n_raw) return -1; // Nedostatek dat pro RAW
+        if (delta_type == DELTA_NONE) {
+            if (payload_len < n_raw) return -1;
+            memcpy(output, payload, n_raw);
+            memcpy(dec->previous, output, n_raw);
+            return 0;
+        }
+        if (payload_len < n_raw) return -1;
         memcpy(work, payload, n_raw);
     }
 
@@ -265,5 +549,5 @@ int dmd_decompress(dmd_decoder_t *dec, const uint8_t *input, uint8_t in_len, uin
     }
 
     memcpy(dec->previous, output, n_raw);
-    return 0; // Úspěch
+    return 0;
 }
