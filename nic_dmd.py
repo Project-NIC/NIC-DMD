@@ -3,7 +3,7 @@
 """
 NIC DMD — Delta Markov Duda
 ===========================
-Adaptivní komprese pro malé procesory a LoRa přenos.
+Adaptivní komprese pro embeded.
 Nibble Huffman komprese integrována jako standardní metoda.
 
 Záhlaví (1 bajt):
@@ -15,7 +15,7 @@ Záhlaví (1 bajt):
   bit 6:   µANS komprese (1=ON)
   bit 5:   flagování nulových bajtů (1=ON)
   bit 4-3: delta: 00=žádná, 01=1B, 10=2B, 11=FULL (big-int s carry)
-  bit 2-0: číslo vzorku 0-7 (0 = keyframe)
+  bit 2-0: číslo vzorku 0-6 (0 = keyframe, 7 = vyhrazeno pro verzi protokolu)
 
   Kombinace bit 7 + bit 5 = FLAG+HUF
 
@@ -42,10 +42,13 @@ NIC — Native Intellect Community
 https://github.com/Project-NIC
 """
 
+__version__ = "0.1.0"
+
 # ---------------------------------------------------------------------------
 # Konstanty — odpovídají #define v C hlavičce
 # ---------------------------------------------------------------------------
 
+# Kalibrováno na kombinovaný meteo+GPS dataset (viz benchmarky)
 ANS_SCALE    = 32    # uint8_t
 ANS_WEIGHT_0 = 29    # uint8_t — váha nulového bitu
 ANS_WEIGHT_1 = 3     # uint8_t — váha jedničkového bitu
@@ -55,7 +58,8 @@ DELTA_1B   = 1
 DELTA_2B   = 2
 DELTA_FULL = 3       # [P4] big-int s carry propagací
 
-DMD_KEYFRAME_EVERY = 8
+# Hodnota 7 u vzorku je vyhrazena pro verzování protokolu, cyklus je tedy zkrácen
+DMD_KEYFRAME_EVERY = 7
 
 # ---------------------------------------------------------------------------
 # [Z3] Popcount LUT — 256 hodnot, odpovídá PROGMEM tabulce v C
@@ -82,7 +86,7 @@ def _count_onebits(data: bytes) -> int:
 # ---------------------------------------------------------------------------
 # [P2] Pevná nibble Huffman tabulka v ROM
 # Natrénovaná na kombinovaných datech (meteo + GPS) po delta+ZZ
-# 32B ROM — hi nibble kódy + lo nibble kódy
+# 64B ROM — hi nibble kódy + lo nibble kódy
 # ---------------------------------------------------------------------------
 
 _HUF_HI_LEN  = (1, 3, 3, 4, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6)
@@ -124,6 +128,9 @@ _HUF_LO_CODE = (
     0x19,  # 0xE
     0x18,  # 0xF
 )
+
+# [N1] Precomputované masky pro optimalizaci bitových operací
+_MASKS = (0x00, 0x01, 0x03, 0x07, 0x0F, 0x1F, 0x3F, 0x7F, 0xFF)
 
 # ---------------------------------------------------------------------------
 # [P3] Nibble Huffman enkódování
@@ -219,13 +226,15 @@ def _huf_decode_nibble(stream: bytes, stream_len: int,
         code_len = lens_tab[sym]
         if bit_cnt[0] < code_len:
             continue
-        peek = (bit_buf[0] >> (bit_cnt[0] - code_len)) & ((1 << code_len) - 1)
+        # [N1] Použití předpočítané masky místo (1 << code_len) - 1
+        peek = (bit_buf[0] >> (bit_cnt[0] - code_len)) & _MASKS[code_len]
         if peek == codes_tab[sym]:
             bit_cnt[0] -= code_len
-            bit_buf[0] &= (1 << bit_cnt[0]) - 1
+            bit_buf[0] &= _MASKS[bit_cnt[0]]
             return sym
 
-    raise ValueError("Neznámý Huffman kód")
+    # [V3] Tvrdá kontrola chyb
+    raise ValueError(f"Invalid Huffman code at index {in_pos[0]}")
 
 
 def _huffman_decode(data: bytes, n_symbols: int) -> bytes:
@@ -256,6 +265,7 @@ def _huffman_decode(data: bytes, n_symbols: int) -> bytes:
 
 def _build_header(sample_num: int, use_huf: bool, use_ans: bool,
                   use_flag: bool, delta_type: int) -> int:
+    # [V4] Hodnota 7 je rezervována pro budoucí rozšíření protokolu
     h  = sample_num & 0x07
     h |= (delta_type & 0x03) << 3
     if use_flag: h |= (1 << 5)
@@ -265,12 +275,16 @@ def _build_header(sample_num: int, use_huf: bool, use_ans: bool,
 
 
 def _parse_header(h: int) -> dict:
+    sample_num = h & 0x07
+    # [V4] Zamezení zpracování nepodporované verze
+    if sample_num == 7:
+        raise ValueError("Unsupported protocol version (sample_num=7 is reserved)")
     return {
         'use_huf':    bool(h & (1 << 7)),
         'use_ans':    bool(h & (1 << 6)),
         'use_flag':   bool(h & (1 << 5)),
         'delta_type': (h >> 3) & 0x03,
-        'sample_num': h & 0x07,
+        'sample_num': sample_num,
     }
 
 
@@ -440,7 +454,7 @@ def _uans_encode(data: bytes, limit: int) -> bytes | None:
 
 
 def _uans_decode(data: bytes) -> bytes:
-    length     = data[0]                              # uint8_t
+    length     = data[0]                               # uint8_t
     state      = ((data[1] << 8) | data[2]) & 0xFFFF # uint16_t
     si         = 3
     stream_end = len(data)
@@ -496,6 +510,7 @@ def _flag_encode(data: bytes, limit: int) -> bytes | None:
     flag_map = bytearray(map_size)
     non_zero = bytearray()
     nz_limit = limit - 1 - map_size   # kolik nenulových bajtů se vejde
+    nz_count = 0  # [N1] cachovaný čítač pro optimalizaci
 
     # [Z4] Rotující maska
     mask    = 0x80
@@ -506,9 +521,10 @@ def _flag_encode(data: bytes, limit: int) -> bytes | None:
             flag_map[map_pos] |= mask
         else:
             # [P6] Early exit
-            if len(non_zero) >= nz_limit:
+            if nz_count >= nz_limit:
                 return None
             non_zero.append(b)
+            nz_count += 1
 
         mask >>= 1
         if mask == 0:
@@ -586,7 +602,7 @@ def dmd_compress(current: bytes, previous: bytes, sample_num: int) -> bytes:
     winning_method = 0        # 0=RAW, 1=ANS, 2=HUF, 3=FLAG, 4=FLAG+HUF
     payload        = bytearray(current)   # RAW záchrana
 
-    # (a) µANS — jen pokud zero_ratio >= 45% [P5]
+    # (a) µANS — jen pokud zero_ratio >= 45% (práh kalibrován na meteo+GPS datasetu)
     zero_count = 0
     for b in work:
         if b == 0:
