@@ -29,7 +29,7 @@ The protocol runs fully on an ATmega328 microcontroller and requires no large di
 Existing compression libraries for embedded devices either require hundreds of extra bytes of RAM (Heatshrink), or need to transmit the Huffman table alongside the data. DMD takes a different approach — it combines several simple methods with heuristic analysis and selects the best result for each packet individually.
 
 **Key advantages:**
-- Fixed Huffman table in ROM only (32 B), no extra RAM
+- Fixed Huffman table in ROM only (64 B), no extra RAM
 - Adaptive method selection per packet — up to 5 candidates
 - Fully deterministic decompression — no data loss
 - Maximum data expansion of 1 byte (header) in the worst case
