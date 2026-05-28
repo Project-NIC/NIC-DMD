@@ -26,7 +26,7 @@ Protokol je plně funkční na kontroléru ATmega328 a nevyžaduje žádné velk
 Existující kompresní knihovny pro embedded zařízení buď vyžadují stovky bajtů RAM navíc (Heatshrink), nebo potřebují přenášet Huffmanovu tabulku spolu s daty. DMD volí jinou cestu — kombinuje několik jednoduchých metod s heuristickou analýzou a vybírá nejlepší výsledek pro každý paket zvlášť.
 
 **Hlavní výhody:**
-- Pevná Huffmanova tabulka pouze v ROM (32B), žádná RAM navíc
+- Pevná Huffmanova tabulka pouze v ROM (64B), žádná RAM navíc
 - Adaptivní výběr metody pro každý paket — až 5 kandidátů
 - Plně deterministická dekomprese — žádné ztráty dat
 - Maximální expanze dat o 1 bajt (záhlaví) v nejhorším případě
