@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+
 """
 NIC DMD — Delta Markov Duda
 ===========================
@@ -35,7 +37,7 @@ Poznámky k implementaci:
   [P7] FLAG+HUF kombinovaný režim
   [P8] 4-cestný výběr s předáváním best_size jako limitu
 
-Licence: GPL v3
+Licence: MIT
 NIC — Native Intellect Community
 https://github.com/Project-NIC
 """
