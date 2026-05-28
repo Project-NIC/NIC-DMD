@@ -1,5 +1,5 @@
 """
-NIC DMD+ — Fetcher reálných dat
+NIC DMD — Fetcher reálných dat
 ================================
 Více zdrojů dat pro benchmark bez závislosti na archive-api.open-meteo.com
 
