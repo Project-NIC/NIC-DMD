@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+
 """
 NIC DMD — Python testy
 Spusť přes: make python  nebo  python3 nic_dmd_test.py
@@ -80,8 +82,20 @@ saving = (1 - s_c / s_o) * 100
 print(f"  100 paketů: {'OK' if e==0 else f'CHYBY={e}'} (úspora {saving:.1f}%)")
 check("meteo", e == 0)
 
-# Test 5: C vs Python shoda (přes ctypes pokud dostupné)
-print("\nTest 5: přeskočen (ctypes test spusť zvlášť)")
+# Test 5: Rezervovaná verze protokolu
+print("\nTest 5: Rezervovaná verze protokolu (sample_num=7)")
+total += 1
+reserved_header = bytes([7])  # Nastaví sample_num = 7
+dummy_payload = bytes(16)
+try:
+    dmd_decompress(reserved_header + dummy_payload, dummy_payload)
+    print("  CHYBA: Dekodér neoprávněně přijal paket s rezervovanou verzí protokolu!")
+    errors += 1
+except ValueError:
+    print("  OK (Výjimka pro nepodporovanou verzi byla správně zachycena)")
+
+# Test 6: C vs Python shoda (přes ctypes pokud dostupné)
+print("\nTest 6: přeskočen (ctypes test spusť zvlášť)")
 
 print(f"\n{'='*50}")
 print(f"CELKEM: {total} testů, {errors} chyb")
