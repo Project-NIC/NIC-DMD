@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 #include "nic_dmd.h"
 #include <string.h>
 
@@ -205,19 +207,38 @@ uint8_t dmd_compress(dmd_encoder_t *enc, const uint8_t *current, uint8_t *output
     return best_size + 1;
 }
 
-void dmd_decompress(dmd_decoder_t *dec, const uint8_t *input, uint8_t in_len, uint8_t *output) {
+/* Dekompresní funkce s tvrdým ošetřením chyb (V3, V4, K2) */
+int dmd_decompress(dmd_decoder_t *dec, const uint8_t *input, uint8_t in_len, uint8_t *output) {
+    if (in_len == 0) return -1; // Neplatná data / prázdný paket
+
     uint8_t n_raw = dec->pkt_len;
     uint8_t header = input[0];
     const uint8_t *payload = &input[1];
     
+    uint8_t sample_num = header & 0x07;
+    if (sample_num == 7) {
+        return -3; // Chyba: Nepodporovaná verze protokolu
+    }
+
+    bool use_huf = (header & (1 << 7)) != 0;
+    bool use_ans = (header & (1 << 6)) != 0;
+    if (use_huf || use_ans) {
+        return -2; // Chyba: Komprese Huffman a ANS nejsou v této C implementaci podporovány
+    }
+
     bool use_flag = (header & (1 << 5)) != 0;
     uint8_t delta_type = (header >> 3) & 0x03;
 
     DMD_VLA(uint8_t, work, n_raw);
 
     if (use_flag) {
+        if (in_len <= 1) return -1; // Ochrana proti přetečení
         uint8_t n = payload[0];
+        if (n != n_raw) return -1;  // Rozpor v délce paketu
+        
         uint8_t map_size = (n + 7) / 8;
+        if (1 + map_size > in_len - 1) return -1; // Nedostatek dat pro mapu
+
         uint8_t nz_idx = 1 + map_size;
         uint8_t mask = 0x80;
         uint8_t map_pos = 1;
@@ -226,12 +247,14 @@ void dmd_decompress(dmd_decoder_t *dec, const uint8_t *input, uint8_t in_len, ui
             if (payload[map_pos] & mask) {
                 work[i] = 0;
             } else {
+                if (nz_idx >= in_len - 1) return -1; // Ochrana proti přetečení
                 work[i] = payload[nz_idx++];
             }
             mask >>= 1;
             if (mask == 0) { mask = 0x80; map_pos++; }
         }
     } else {
+        if (in_len - 1 < n_raw) return -1; // Nedostatek dat pro RAW
         memcpy(work, payload, n_raw);
     }
 
@@ -242,4 +265,5 @@ void dmd_decompress(dmd_decoder_t *dec, const uint8_t *input, uint8_t in_len, ui
     }
 
     memcpy(dec->previous, output, n_raw);
+    return 0; // Úspěch
 }
