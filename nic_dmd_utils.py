@@ -47,6 +47,9 @@ def dmd_analyze_packets(packets: list,
         h        = _parse_header(compressed[0])
         orig_len = len(packet)
         comp_len = len(compressed)
+        # Úspora vůči "bajtům na drátě": baseline = orig_len + 1B (hypotetická
+        # hlavička i u nekomprimovaného RAW přenosu), aby bylo srovnání férové
+        # vůči comp_len, který 1B hlavičku DMD vždy obsahuje.
         saving   = round((1 - comp_len / (orig_len + 1)) * 100, 1)
 
         dt = h['delta_type']

@@ -233,6 +233,11 @@ static int _uans_encode(const uint8_t *data, uint8_t len, uint8_t limit, uint8_t
             byte >>= 1;
 
             while (state >= weight * 256) {
+                /* [P5] Tvrdá mez i uvnitř bitové smyčky — early exit se jinak
+                   testuje až mezi bajty, takže by renormalizace mohla zapsat
+                   za konec stream_buf (limit B). Chování beze změny: paket,
+                   který by takto přetekl, by byl stejně odmítnut. */
+                if (stream_len >= stream_limit) return -1;
                 stream_buf[stream_len++] = state & 0xFF;
                 state >>= 8;
             }
@@ -330,6 +335,12 @@ void dmd_decoder_init(dmd_decoder_t *dec, uint8_t pkt_len) {
 ------------------------------------------------------------------------- */
 uint16_t dmd_compress(dmd_encoder_t *enc, const uint8_t *current, uint8_t *output) {
     uint8_t n_raw = enc->pkt_len;
+#if defined(__GNUC__)
+    /* pkt_len >= 1 je garantováno API (viz README). Tento hint umožní
+       optimalizátoru dimenzovat VLA buffery jako >=1 a ruší false-positive
+       -Wstringop-overflow nad memcpy do payload[]. */
+    if (n_raw == 0) __builtin_unreachable();
+#endif
     bool is_keyframe = (enc->sample_num == 0);
 
     DMD_VLA(uint8_t, work, n_raw);

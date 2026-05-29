@@ -427,6 +427,10 @@ def _uans_encode(data: bytes, limit: int) -> bytes | None:
             byte   = byte >> 1         # rotace
 
             while state >= weight * 256:
+                # [P5] Tvrdá mez i uvnitř bitové smyčky — shodně s C implementací.
+                # Chování beze změny: paket, který by přetekl, je stejně odmítnut.
+                if len(output) >= stream_limit:
+                    return None
                 output.append(state & 0xFF)
                 state >>= 8
 
