@@ -3,7 +3,7 @@ name = "nic-dmd"
 version = "0.1.0"
 requires-python = ">=3.10"
 dependencies = [
-    "requests"py
+    "requests"
 ]
 
 [project.optional-dependencies]

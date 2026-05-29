@@ -18,7 +18,7 @@ void check(const char* name, bool ok) {
 int main() {
     printf("\n=== NIC DMD - C testy ===\n\n");
     
-    int pkt_lens[] = {8, 16, 32, 64, 128};
+    int pkt_lens[] = {8, 16, 32, 64, 128, 255};
     int num_lens = sizeof(pkt_lens) / sizeof(pkt_lens[0]);
 
     printf("Test 1: round-trip (pseudonahodna data)\n");
@@ -42,7 +42,7 @@ int main() {
                 data[k] = rand() % 256;
             }
 
-            uint8_t c_len = dmd_compress(&enc, data, comp);
+            uint16_t c_len = dmd_compress(&enc, data, comp);
             
             // Ošetření návratové hodnoty podle nové specifikace (0 = úspěch)
             int res = dmd_decompress(&dec, comp, c_len, decomp);

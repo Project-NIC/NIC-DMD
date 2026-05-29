@@ -211,7 +211,7 @@ DELTA1 (1-bajtová delta) dominuje ve všech kategoriích — přes 70 % použit
 
 ## Spotřeba RAM
 
-Buffery jsou dimenzovány pomocí C99 VLA podle skutečné délky paketu `N`. Hodnoty zahrnují stack při kompresi a struktury enkodéru/dekodéru.
+Pracovní buffery při kompresi i dekompresi leží na zásobníku (stack) a existují jen po dobu volání funkce. Trvale v paměti zůstávají pouze struktury enkodéru a dekodéru. Hodnoty v tabulce platí pro build dimenzovaný přesně na délku paketu `N` (viz poznámka pod tabulkou):
 
 ```
 ================================================================================
@@ -227,7 +227,12 @@ Buffery jsou dimenzovány pomocí C99 VLA podle skutečné délky paketu `N`. Ho
 
 Peak RAM při volání `dmd_compress` = Stack komprese + dmd_encoder_t.
 
-Pro typické použití s LoRa (16–64B pakety) je peak **80–230B** — bez problémů na ATmega328 (2KB RAM).
+**Jak to přeložit (důležité pro RAM):**
+
+- **Default (bez přepínače):** pracovní buffery se dělají přes C99 VLA — za běhu se nafouknou přesně na délku zpracovávaného paketu. Trvalý buffer `previous[]` ve strukturách je ale napevno **255 B** (enkodér 257 B + dekodér 256 B), ať posíláš jakkoli krátké pakety. Tahle varianta je univerzální — jedna binárka zvládne libovolnou délku do 255 B — a hodí se na PC a pro testování.
+- **S `-DDMD_PKT_MAX_BUILD=N`:** všechny buffery (včetně `previous[]`) se zafixují přesně na `N` a **žádné VLA se nepoužije**. Teprve tohle ti dá ta malá čísla z tabulky výše a kód běží i na překladačích bez podpory VLA (IAR, Keil, SDCC…). **Pro nasazení na MCU (ATmega328 apod.) je tohle doporučená a nejčistší volba** — stačí `N` nastavit na svoji maximální délku paketu.
+
+Pro typické použití s LoRa (16–64B pakety, přeloženo s `-DDMD_PKT_MAX_BUILD=N`) je peak **80–230 B** — bez problémů na ATmega328 (2KB RAM). V defaultním buildu počítej navíc s ~513 B trvale obsazenými strukturami (255B `previous` v každé).
 
 ---
 
@@ -380,16 +385,49 @@ void setup() {
 
 void loop() {
     uint8_t data[16]          = { /* senzorová data */ };
-    uint8_t compressed[DMD_OUT_MAX];
+    uint8_t compressed[DMD_OUT_MAX];   // DMD_OUT_MAX = délka paketu + 1 (až 256B)
     uint8_t decompressed[16];
 
-    uint8_t comp_len = dmd_compress(&enc, data, compressed);
+    uint16_t comp_len = dmd_compress(&enc, data, compressed);
     lora.send(compressed, comp_len);
 
     // Na přijímači:
-    dmd_decompress(&dec, compressed, comp_len, decompressed);
+    int res = dmd_decompress(&dec, compressed, comp_len, decompressed);
+    if (res != 0) {
+        // res < 0 → paket je vadný, viz tabulka návratových hodnot níže
+    }
 }
 ```
+
+### Návratové hodnoty a chybové kódy
+
+Každá funkce ti po doběhnutí „vrátí" jedno číslo. To číslo je jediný způsob, jak ti knihovna řekne, jak dopadla — žádné výpisy, žádné logování (kvůli úspoře paměti a výkonu). Vyšší program (to, co knihovnu používá) si toto číslo musí přečíst a zařídit se podle něj.
+
+**`dmd_compress(...)` — komprese**
+
+Vrací **délku výstupu v bajtech** (typ `uint16_t`, tj. 16bitové číslo):
+
+| Vrácená hodnota | Co znamená | Co s tím |
+|---|---|---|
+| 2 až 256 | Počet bajtů, které máš odeslat (1B hlavička + komprimovaná data) | Pošli přesně tolik bajtů z `output` |
+
+Komprese **nikdy neselže** a nemá chybový kód — vždy dostaneš platnou délku. V nejhorším případě (255B paket, který se nedá zkomprimovat, např. náhodná nebo šifrovaná data) vyleze **256 B**, tj. o 1 bajt víc než vstup. Tomu se říká maximální expanze o 1B (ten 1 bajt je povinná hlavička). Proto je návratový typ 16bitový — aby se číslo 256 vešlo. Výstupní buffer proto musí mít velikost `DMD_OUT_MAX` (= délka paketu + 1).
+
+**`dmd_decompress(...)` — dekomprese**
+
+Vrací **stavový kód** (typ `int`). Rozkomprimovaná data najdeš v `output` jen tehdy, když je kód `0`:
+
+| Vrácená hodnota | Co znamená | Co s tím |
+|---|---|---|
+| `0` | OK — vše proběhlo v pořádku, `output` obsahuje původní data | Použij `output` |
+| `-1` | Poškozený nebo nevalidní vstup (prázdný paket, nebo nesedí délka payloadu) | Zahoď paket, data jsou nepoužitelná |
+| `-3` | Rezervovaná verze protokolu (v hlavičce je `sample_num = 7`) | Tento paket nepatří této verzi knihovny — zahoď ho |
+
+Záporné číslo tedy vždy znamená „něco je špatně, data nepoužívej". Knihovna sama o sobě nedělá kontrolu integrity (CRC apod.) — předpokládá, že porušené pakety odchytí už nižší vrstva (rádiový modul). Kódy `-1` a `-3` jsou jen poslední pojistka proti zjevně nesmyslnému vstupu.
+
+> **Python verze se chová identicky.** `DmdEncoder.compress()` vrátí stejně dlouhý výstup (i těch 256 B u nejhoršího případu) a `DmdDecoder.decompress()` při poškozeném nebo nevalidním vstupu vyhodí **výjimku** místo záporného kódu — to je pythonovský ekvivalent chyby z C (rezervovaná verze protokolu konkrétně vyhodí `ValueError`). Ošetři ji přes `try/except`. Stejný vstup jinak v C i v Pythonu vyprodukuje **bajtově totožný výstup**, takže můžeš komprimovat na zařízení v C a rozkomprimovat na serveru/Raspberry Pi v Pythonu (a naopak).
+
+---
 
 ### Překlad pro jiné překladače (bez VLA)
 

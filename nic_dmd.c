@@ -328,7 +328,7 @@ void dmd_decoder_init(dmd_decoder_t *dec, uint8_t pkt_len) {
 /* -------------------------------------------------------------------------
    Hlavní kompresní smyčka
 ------------------------------------------------------------------------- */
-uint8_t dmd_compress(dmd_encoder_t *enc, const uint8_t *current, uint8_t *output) {
+uint16_t dmd_compress(dmd_encoder_t *enc, const uint8_t *current, uint8_t *output) {
     uint8_t n_raw = enc->pkt_len;
     bool is_keyframe = (enc->sample_num == 0);
 
@@ -357,7 +357,7 @@ uint8_t dmd_compress(dmd_encoder_t *enc, const uint8_t *current, uint8_t *output
     uint8_t best_size = n_raw;
     uint8_t winning_method = 0; // 0=RAW, 1=ANS, 2=HUF, 3=FLAG, 4=FLAG+HUF
     DMD_VLA(uint8_t, payload, n_raw);
-    memcpy(payload, work, n_raw);
+    memcpy(payload, current, n_raw);   // RAW zachrana: musi byt puvodni bajty, ne delta-transformovany work
 
     // (a) uANS
     uint8_t zero_count = 0;
@@ -450,13 +450,15 @@ uint8_t dmd_compress(dmd_encoder_t *enc, const uint8_t *current, uint8_t *output
     memcpy(enc->previous, current, n_raw);
     enc->sample_num = (enc->sample_num + 1) % DMD_KEYFRAME_EVERY;
 
-    return best_size + 1;
+    /* Vystup = 1B hlavicka + best_size. Maximum je 256 (255B RAW paket),
+       coz se vejde do uint16_t — zadne preteceni, komprese vzdy uspeje. */
+    return (uint16_t)best_size + 1;
 }
 
 /* -------------------------------------------------------------------------
    Hlavní dekompresní smyčka
 ------------------------------------------------------------------------- */
-int dmd_decompress(dmd_decoder_t *dec, const uint8_t *input, uint8_t in_len, uint8_t *output) {
+int dmd_decompress(dmd_decoder_t *dec, const uint8_t *input, uint16_t in_len, uint8_t *output) {
     if (in_len == 0) return -1;
     uint8_t n_raw = dec->pkt_len;
     uint8_t header = input[0];
