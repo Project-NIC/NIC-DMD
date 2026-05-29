@@ -2,6 +2,7 @@
   <img src="NICDMD.svg" width="200"/>
 </p>
 
+[Pro dokumentaci v češtině klikněte zde](README_cs.md) | [For documentation in English click here](README.md)
 
 ★ N.I.C. ★
 
