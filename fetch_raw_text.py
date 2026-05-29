@@ -1,19 +1,19 @@
 """
 NIC DMD — Raw Text Benchmark
 =============================
-Stáhne data přesně jak je posílají zdrojové agentury a zkomprimuje je
-bez jakýchkoliv úprav — surový JSON/CSV text jako bajty.
+Downloads data exactly as source agencies deliver it and compresses it
+without any modifications — raw JSON/CSV text as bytes.
 
-Jeden časový záznam = jeden paket. Padding nulami na pevnou délku.
-Délka paketu se určí automaticky z prvního záznamu.
+One time record = one packet. Zero-padded to a fixed length.
+Packet length is determined automatically from the first record.
 
-Závislosti: pip install requests
+Dependencies: pip install requests
 """
 
 import os, sys, math, time, csv, zipfile, io, json, logging
 import requests
 from nic_dmd_utils import dmd_analyze_packets as analyze_packets, dmd_print_summary as print_summary
-# Import sjednocených funkcí
+# Import shared fetch helpers
 from nic_dmd_fetch import get_session
 
 if sys.platform == 'win32':
@@ -33,21 +33,21 @@ def save_report(results, filename):
     print(f"  Report: {path}")
 
 def to_packet(text: str, pkt_len: int) -> bytes:
-    """Převede text na bajty, ořeže nebo doplní nulami na pkt_len."""
+    """Convert text to bytes, truncate or zero-pad to pkt_len."""
     raw = text.encode('utf-8')
     if len(raw) >= pkt_len:
         return raw[:pkt_len]
     return raw + bytes(pkt_len - len(raw))
 
 def detect_pkt_len(samples: list[str]) -> int:
-    """Zjistí délku paketu z prvních vzorků — zaokrouhlí nahoru na násobek 8."""
+    """Determine packet length from the first few samples — round up to a multiple of 8."""
     if not samples: return 64
     avg = sum(len(s.encode('utf-8')) for s in samples[:10]) // min(10, len(samples))
     pkt_len = min(255, ((avg + 15) // 8) * 8)
     return max(8, pkt_len)
 
 # ---------------------------------------------------------------------------
-# 1. DWD SYNOP — raw CSV řádky
+# 1. DWD SYNOP — raw CSV rows
 # ---------------------------------------------------------------------------
 
 DWD_STATIONS = {
@@ -64,7 +64,7 @@ def fetch_dwd_raw(station_id='00691', limit=10000):
     try:
         r = SESSION.get(url, timeout=30); r.raise_for_status()
     except Exception:
-        logging.warning(f"Chyba při stahování DWD raw pro {station_id}", exc_info=True)
+        logging.warning(f"Failed to download DWD raw for {station_id}", exc_info=True)
         return [], []
 
     try:
@@ -73,13 +73,13 @@ def fetch_dwd_raw(station_id='00691', limit=10000):
         if not candidates: return [], []
         content = z.read(candidates[0]).decode('latin-1')
     except Exception:
-        logging.warning("Chyba při rozbalování DWD archivu", exc_info=True)
+        logging.warning("Failed to extract DWD archive", exc_info=True)
         return [], []
 
     lines = content.strip().split('\n')
     data_lines = [l.strip().removesuffix(';eor') for l in lines[1:] if l.strip()]
     pkt_len = detect_pkt_len(data_lines[:10])
-    
+
     packets = []
     timestamps = []
     for line in data_lines[:limit]:
@@ -90,7 +90,7 @@ def fetch_dwd_raw(station_id='00691', limit=10000):
     return packets, timestamps
 
 # ---------------------------------------------------------------------------
-# 2. Open-Meteo — raw JSON záznamy
+# 2. Open-Meteo — raw JSON records
 # ---------------------------------------------------------------------------
 
 FORECAST_LOCATIONS = [
@@ -112,7 +112,7 @@ def fetch_meteo_raw(lat, lon, name, limit=10000):
         r = SESSION.get(url, params=params, timeout=20); r.raise_for_status()
         h = r.json()["hourly"]
     except Exception:
-        logging.warning(f"Chyba při stahování Open-Meteo raw pro {name}", exc_info=True)
+        logging.warning(f"Failed to download Open-Meteo raw for {name}", exc_info=True)
         return [], []
 
     keys = [k for k in h.keys() if k != 'time']
@@ -129,7 +129,7 @@ def fetch_meteo_raw(lat, lon, name, limit=10000):
     return packets, timestamps
 
 # ---------------------------------------------------------------------------
-# 3. NOAA Tides — raw JSON záznamy
+# 3. NOAA Tides — raw JSON records
 # ---------------------------------------------------------------------------
 
 NOAA_STATIONS = { '8518750': 'New_York', '9414290': 'San_Francisco' }
@@ -153,15 +153,15 @@ def fetch_noaa_raw(station='8518750', limit=10000):
                 if len(raw_list) >= limit: break
             time.sleep(0.3)
         except Exception:
-            logging.warning(f"Chyba při stahování NOAA raw pro {station}", exc_info=True)
+            logging.warning(f"Failed to download NOAA raw for {station}", exc_info=True)
             break
         cur = nxt
-    
+
     pkt_len = detect_pkt_len(raw_list[:10])
     return [to_packet(r, pkt_len) for r in raw_list], timestamps
 
 # ---------------------------------------------------------------------------
-# 4. USGS Earthquake — raw CSV záznamy
+# 4. USGS Earthquake — raw CSV records
 # ---------------------------------------------------------------------------
 
 def fetch_usgs_raw(limit=10000):
@@ -171,7 +171,7 @@ def fetch_usgs_raw(limit=10000):
         r = SESSION.get(url, timeout=30); r.raise_for_status()
         lines = r.text.strip().split('\n')
     except Exception:
-        logging.warning("Chyba při stahování USGS raw", exc_info=True)
+        logging.warning("Failed to download USGS raw", exc_info=True)
         return [], []
 
     data_lines = [l.strip() for l in lines[1:] if l.strip()]
@@ -186,5 +186,4 @@ def fetch_usgs_raw(limit=10000):
     return packets, timestamps
 
 if __name__ == "__main__":
-    # Hlavní spuštění (zůstává beze změny)
     pass

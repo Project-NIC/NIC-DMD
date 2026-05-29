@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: MIT
 
 """
-NIC DMD — Python testy
-Spusť přes: make python  nebo  python3 nic_dmd_test.py
+NIC DMD — Python tests
+Run via: make python  or  python3 nic_dmd_test.py
 """
 
 import random, struct, sys
@@ -17,12 +17,12 @@ def check(name, ok):
     total += 1
     if not ok:
         errors += 1
-        print(f"  CHYBA: {name}")
+        print(f"  FAIL: {name}")
 
-print("\n=== NIC DMD — Python testy ===\n")
+print("\n=== NIC DMD — Python tests ===\n")
 
-# Test 1: round-trip různé délky
-print("Test 1: round-trip (náhodná data)")
+# Test 1: round-trip various lengths
+print("Test 1: round-trip (random data)")
 random.seed(42)
 for pkt_len in [8, 16, 32, 64, 128, 255]:
     enc = DmdEncoder(pkt_len)
@@ -34,7 +34,7 @@ for pkt_len in [8, 16, 32, 64, 128, 255]:
         decomp = dec.decompress(comp)
         if decomp != data:
             e += 1
-    print(f"  pkt_len={pkt_len:3d}: 500 paketů: {'OK' if e==0 else f'CHYBY={e}'}")
+    print(f"  pkt_len={pkt_len:3d}: 500 packets: {'OK' if e==0 else f'ERRORS={e}'}")
     check(f"round-trip pkt_len={pkt_len}", e == 0)
 
 # Test 2: all-zeros
@@ -48,7 +48,7 @@ for pkt_len in [16, 64, 128]:
         comp   = enc.compress(data)
         decomp = dec.decompress(comp)
         if decomp != data: e += 1
-    print(f"  pkt_len={pkt_len:3d}: all-zeros: {'OK' if e==0 else f'CHYBY={e}'}")
+    print(f"  pkt_len={pkt_len:3d}: all-zeros: {'OK' if e==0 else f'ERRORS={e}'}")
     check(f"all-zeros pkt_len={pkt_len}", e == 0)
 
 # Test 3: keyframe
@@ -60,11 +60,11 @@ for pkt_len in [16, 64, 255]:
     comp     = dmd_compress(data, previous, 0)
     decomp   = dmd_decompress(comp, previous)
     ok       = decomp == data
-    print(f"  pkt_len={pkt_len:3d}: {'OK' if ok else 'CHYBA'} (comp {len(comp)}B)")
+    print(f"  pkt_len={pkt_len:3d}: {'OK' if ok else 'FAIL'} (comp {len(comp)}B)")
     check(f"keyframe pkt_len={pkt_len}", ok)
 
 # Test 4: meteo data
-print("\nTest 4: meteo data (postupné změny)")
+print("\nTest 4: meteo data (gradual changes)")
 enc  = DmdEncoder(16)
 dec  = DmdDecoder(16)
 t    = -800
@@ -79,27 +79,27 @@ for _ in range(100):
     if decomp != data: e += 1
     s_o += 17; s_c += len(comp)
 saving = (1 - s_c / s_o) * 100
-print(f"  100 paketů: {'OK' if e==0 else f'CHYBY={e}'} (úspora {saving:.1f}%)")
+print(f"  100 packets: {'OK' if e==0 else f'ERRORS={e}'} (saving {saving:.1f}%)")
 check("meteo", e == 0)
 
-# Test 5: Rezervovaná verze protokolu
-print("\nTest 5: Rezervovaná verze protokolu (sample_num=7)")
+# Test 5: Reserved protocol version
+print("\nTest 5: Reserved protocol version (sample_num=7)")
 total += 1
-reserved_header = bytes([7])  # Nastaví sample_num = 7
+reserved_header = bytes([7])  # Sets sample_num = 7
 dummy_payload = bytes(16)
 try:
     dmd_decompress(reserved_header + dummy_payload, dummy_payload)
-    print("  CHYBA: Dekodér neoprávněně přijal paket s rezervovanou verzí protokolu!")
+    print("  FAIL: Decoder incorrectly accepted a packet with reserved protocol version!")
     errors += 1
 except ValueError:
-    print("  OK (Výjimka pro nepodporovanou verzi byla správně zachycena)")
+    print("  OK (ValueError correctly raised for unsupported version)")
 
-# Test 6: C vs Python shoda (přes ctypes pokud dostupné)
-print("\nTest 6: přeskočen (ctypes test spusť zvlášť)")
+# Test 6: C vs Python cross-check (via ctypes if available)
+print("\nTest 6: skipped (run ctypes cross-check separately)")
 
 print(f"\n{'='*50}")
-print(f"CELKEM: {total} testů, {errors} chyb")
-print(f"VÝSLEDEK: {'✓ VŠE OK' if errors == 0 else '✗ CHYBY!'}")
+print(f"TOTAL: {total} tests, {errors} failures")
+print(f"RESULT: {'✓ ALL OK' if errors == 0 else '✗ FAILURES!'}")
 print(f"{'='*50}\n")
 
 sys.exit(0 if errors == 0 else 1)

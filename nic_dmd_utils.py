@@ -3,10 +3,10 @@
 """
 NIC DMD — Utils
 ===============
-Pomocné funkce pro analýzu a výpis výsledků komprese.
-Importuj spolu s nic_dmd.py.
+Helper functions for compression analysis and result reporting.
+Import alongside nic_dmd.py.
 
-Licence: MIT
+License: MIT
 NIC — Native Intellect Community
 https://github.com/Project-NIC
 """
@@ -23,9 +23,9 @@ def dmd_analyze_packets(packets: list,
                         timestamps: list = None,
                         source_name: str = "DMD") -> list:
     """
-    Komprimuje pakety a vrátí výsledky pro každý paket.
+    Compress packets and return per-packet results.
 
-    Vrátí seznam slovníků:
+    Returns a list of dicts with keys:
       index, timestamp, source, sample_num, method,
       delta_type, use_flag, use_ans,
       original_len, compressed_len, saving_pct,
@@ -47,6 +47,9 @@ def dmd_analyze_packets(packets: list,
         h        = _parse_header(compressed[0])
         orig_len = len(packet)
         comp_len = len(compressed)
+        # Saving relative to "bytes on the wire": baseline = orig_len + 1 B (the
+        # hypothetical header even for an uncompressed RAW transmission), so the
+        # comparison is fair against comp_len which always includes the 1 B DMD header.
         saving   = round((1 - comp_len / (orig_len + 1)) * 100, 1)
 
         dt = h['delta_type']
@@ -91,7 +94,7 @@ def dmd_analyze_packets(packets: list,
 
 
 def dmd_print_summary(results: list) -> None:
-    """Vypíše souhrnnou tabulku výsledků."""
+    """Print a summary table of compression results."""
     if not results:
         return
 
@@ -99,10 +102,10 @@ def dmd_print_summary(results: list) -> None:
     w   = results[0]['original_len']
 
     print(f"\n{'='*105}")
-    print(f"[DMD] Zdroj: {src} | Paketů: {len(results)} | Šířka: {w}B")
+    print(f"[DMD] Source: {src} | Packets: {len(results)} | Width: {w}B")
     print(f"{'='*105}")
-    print(f"{'#':>6} | {'Čas':<22} | {'Vz':>3} | {'Metoda':<30} | "
-          f"{'Orig':>5} | {'Komp':>5} | {'Úsp%':>6} | {'Nuly':>5} | OK")
+    print(f"{'#':>6} | {'Time':<22} | {'Smp':>3} | {'Method':<30} | "
+          f"{'Orig':>5} | {'Comp':>5} | {'Sav%':>6} | {'Zeros':>5} | OK")
     print(f"{'-'*105}")
 
     for r in results:
@@ -119,10 +122,10 @@ def dmd_print_summary(results: list) -> None:
     methods    = Counter(r['method'] for r in results)
 
     print(f"{'='*105}")
-    print(f"Celkem: {total_orig}B → {total_comp}B | "
-          f"Úspora: {total_orig - total_comp}B ({overall}%) | "
-          f"Chyby: {errors}")
-    print(f"\nPoužití metod:")
+    print(f"Total: {total_orig}B → {total_comp}B | "
+          f"Saving: {total_orig - total_comp}B ({overall}%) | "
+          f"Errors: {errors}")
+    print(f"\nMethod usage:")
     for method, count in methods.most_common():
         pct = round(count / len(results) * 100, 1)
         bar = '█' * int(pct / 2)

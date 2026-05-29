@@ -21,7 +21,7 @@
 #define DELTA_2B   2
 #define DELTA_FULL 3
 
-/* Vyhledávací tabulky a Huffmanovy stromy (ROM) */
+/* Lookup tables and Huffman trees (ROM) */
 static const uint8_t DMD_PROGMEM _POPCOUNT_LUT[256] = {
     0,1,1,2,1,2,2,3, 1,2,2,3,2,3,3,4, 1,2,2,3,2,3,3,4, 2,3,3,4,3,4,4,5,
     1,2,2,3,2,3,3,4, 2,3,3,4,3,4,4,5, 2,3,3,4,3,4,4,5, 3,4,4,5,4,5,5,6,
@@ -39,7 +39,7 @@ static const uint8_t DMD_PROGMEM _HUF_LO_LEN[]  = {1, 4, 4, 5, 4, 5, 5, 5, 5, 5,
 static const uint8_t DMD_PROGMEM _HUF_LO_CODE[] = {0x01, 0x04, 0x07, 0x0B, 0x03, 0x04, 0x0A, 0x03, 0x05, 0x02, 0x00, 0x01, 0x1B, 0x1A, 0x19, 0x18};
 
 /* -------------------------------------------------------------------------
-   Pomocné funkce pro ZigZag a Delta
+   ZigZag and Delta helper functions
 ------------------------------------------------------------------------- */
 static inline uint8_t _zigzag_enc(uint8_t x) {
     int8_t s = (int8_t)x;
@@ -117,13 +117,13 @@ static void _delta_decode_zz(const uint8_t *data, const uint8_t *previous, uint8
 }
 
 /* -------------------------------------------------------------------------
-   [P3] Nibble Huffman Kodování a Dekodování
+   [P3] Nibble Huffman Encoding and Decoding
 ------------------------------------------------------------------------- */
 static int _huffman_encode(const uint8_t *data, uint8_t len, uint8_t limit, uint8_t *out) {
     if (limit < 2) return -1;
     uint16_t bit_buf = 0;
     uint8_t bit_cnt = 0;
-    uint8_t out_pos = 1; 
+    uint8_t out_pos = 1;
     uint16_t total_bits = 0;
     uint16_t bits_cap = (limit - 1) * 8;
 
@@ -181,7 +181,7 @@ static int _huf_decode_nibble(const uint8_t *stream, uint8_t stream_len, uint8_t
     for (uint8_t sym = 0; sym < 16; sym++) {
         uint8_t code_len = DMD_READ_BYTE(&lens_tab[sym]);
         if (*bit_cnt < code_len) continue;
-        
+
         uint16_t mask = (1 << code_len) - 1;
         uint16_t peek = (*bit_buf >> (*bit_cnt - code_len)) & mask;
         if (peek == DMD_READ_BYTE(&codes_tab[sym])) {
@@ -190,7 +190,7 @@ static int _huf_decode_nibble(const uint8_t *stream, uint8_t stream_len, uint8_t
             return sym;
         }
     }
-    return -1; // Chyba dekodování
+    return -1; // decoding error
 }
 
 static int _huffman_decode(const uint8_t *data, uint8_t data_len, uint8_t n_symbols, uint8_t *out) {
@@ -215,14 +215,14 @@ static int _huffman_decode(const uint8_t *data, uint8_t data_len, uint8_t n_symb
 }
 
 /* -------------------------------------------------------------------------
-   [Z1][Z6][Z7][Z8] µANS Kodování a Dekodování
+   [Z1][Z6][Z7][Z8] µANS Encoding and Decoding
 ------------------------------------------------------------------------- */
 static int _uans_encode(const uint8_t *data, uint8_t len, uint8_t limit, uint8_t *out) {
     if (limit < 4) return -1;
     uint8_t stream_limit = limit - 3;
     uint16_t state = ANS_SCALE;
-    
-    DMD_VLA(uint8_t, stream_buf, limit); 
+
+    DMD_VLA(uint8_t, stream_buf, limit);
     uint8_t stream_len = 0;
 
     for (int16_t bi = len - 1; bi >= 0; bi--) {
@@ -233,6 +233,11 @@ static int _uans_encode(const uint8_t *data, uint8_t len, uint8_t limit, uint8_t
             byte >>= 1;
 
             while (state >= weight * 256) {
+                /* [P5] Hard bound inside the bit loop — the between-byte early
+                   exit alone would allow renormalisation to write past the end
+                   of stream_buf (limit B). Behaviour is unchanged: any packet
+                   that would overflow is rejected either way. */
+                if (stream_len >= stream_limit) return -1;
                 stream_buf[stream_len++] = state & 0xFF;
                 state >>= 8;
             }
@@ -282,7 +287,7 @@ static int _uans_decode(const uint8_t *data, uint8_t data_len, uint8_t *out) {
 }
 
 /* -------------------------------------------------------------------------
-   [P6][Z4] Flagování nulových bajtů
+   [P6][Z4] Zero-byte flagging
 ------------------------------------------------------------------------- */
 static int _flag_encode(const uint8_t *data, uint8_t len, uint8_t limit, uint8_t *out) {
     uint8_t map_size = (len + 7) / 8;
@@ -312,7 +317,7 @@ static int _flag_encode(const uint8_t *data, uint8_t len, uint8_t limit, uint8_t
 }
 
 /* -------------------------------------------------------------------------
-   Inicializace kodérů a dekodérů
+   Encoder and decoder initialisation
 ------------------------------------------------------------------------- */
 void dmd_encoder_init(dmd_encoder_t *enc, uint8_t pkt_len) {
     enc->pkt_len = pkt_len;
@@ -326,10 +331,16 @@ void dmd_decoder_init(dmd_decoder_t *dec, uint8_t pkt_len) {
 }
 
 /* -------------------------------------------------------------------------
-   Hlavní kompresní smyčka
+   Main compression loop
 ------------------------------------------------------------------------- */
 uint16_t dmd_compress(dmd_encoder_t *enc, const uint8_t *current, uint8_t *output) {
     uint8_t n_raw = enc->pkt_len;
+#if defined(__GNUC__)
+    /* pkt_len >= 1 is guaranteed by the API (see README). This hint lets the
+       optimiser treat VLA sizes as >= 1 and suppresses a false-positive
+       -Wstringop-overflow on the memcpy into payload[]. */
+    if (n_raw == 0) __builtin_unreachable();
+#endif
     bool is_keyframe = (enc->sample_num == 0);
 
     DMD_VLA(uint8_t, work, n_raw);
@@ -357,7 +368,7 @@ uint16_t dmd_compress(dmd_encoder_t *enc, const uint8_t *current, uint8_t *outpu
     uint8_t best_size = n_raw;
     uint8_t winning_method = 0; // 0=RAW, 1=ANS, 2=HUF, 3=FLAG, 4=FLAG+HUF
     DMD_VLA(uint8_t, payload, n_raw);
-    memcpy(payload, current, n_raw);   // RAW zachrana: musi byt puvodni bajty, ne delta-transformovany work
+    memcpy(payload, current, n_raw); // RAW fallback: must hold original bytes, not delta-transformed work
 
     // (a) uANS
     uint8_t zero_count = 0;
@@ -430,13 +441,13 @@ uint16_t dmd_compress(dmd_encoder_t *enc, const uint8_t *current, uint8_t *outpu
         }
     }
 
-    // Nastavení hlavičky
+    // Set header flags
     bool use_huf = false, use_ans = false, use_flag = false;
     if (winning_method == 1) use_ans = true;
     else if (winning_method == 2) use_huf = true;
     else if (winning_method == 3) use_flag = true;
     else if (winning_method == 4) { use_huf = true; use_flag = true; }
-    else { delta_type = DELTA_NONE; } // RAW zachrana
+    else { delta_type = DELTA_NONE; } // RAW fallback
 
     uint8_t header = enc->sample_num & 0x07;
     header |= (delta_type & 0x03) << 3;
@@ -450,13 +461,13 @@ uint16_t dmd_compress(dmd_encoder_t *enc, const uint8_t *current, uint8_t *outpu
     memcpy(enc->previous, current, n_raw);
     enc->sample_num = (enc->sample_num + 1) % DMD_KEYFRAME_EVERY;
 
-    /* Vystup = 1B hlavicka + best_size. Maximum je 256 (255B RAW paket),
-       coz se vejde do uint16_t — zadne preteceni, komprese vzdy uspeje. */
+    /* Output = 1 B header + best_size. Maximum is 256 (255 B RAW packet),
+       which fits in uint16_t — no overflow, compression always succeeds. */
     return (uint16_t)best_size + 1;
 }
 
 /* -------------------------------------------------------------------------
-   Hlavní dekompresní smyčka
+   Main decompression loop
 ------------------------------------------------------------------------- */
 int dmd_decompress(dmd_decoder_t *dec, const uint8_t *input, uint16_t in_len, uint8_t *output) {
     if (in_len == 0) return -1;

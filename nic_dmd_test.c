@@ -44,7 +44,7 @@ int main() {
 
             uint16_t c_len = dmd_compress(&enc, data, comp);
             
-            // Ošetření návratové hodnoty podle nové specifikace (0 = úspěch)
+            // Handle return value per the current spec (0 = success)
             int res = dmd_decompress(&dec, comp, c_len, decomp);
             if (res < 0) {
                 errors++;
@@ -57,13 +57,13 @@ int main() {
         check("round-trip", errors == 0);
     }
 
-    // Test 2: Otestování bezpečnostní pojistky (rezervovaná verze 7)
+    // Test 2: Verify the safety guard (reserved protocol version 7)
     printf("\nTest 2: Rezervovana verze protokolu (sample_num=7)\n");
     dmd_decoder_t dec_test;
     dmd_decoder_init(&dec_test, 16);
     
     uint8_t dummy_comp[16] = {0};
-    dummy_comp[0] = 7; // Nastavení hlavičky na sample_num = 7
+    dummy_comp[0] = 7; // Set header to sample_num = 7
     uint8_t dummy_decomp[16];
     
     int res = dmd_decompress(&dec_test, dummy_comp, 16, dummy_decomp);

@@ -3,41 +3,41 @@
 """
 NIC DMD — Delta Markov Duda
 ===========================
-Adaptivní komprese pro embeded.
-Nibble Huffman komprese integrována jako standardní metoda.
+Adaptive compression for embedded devices.
+Nibble Huffman compression integrated as a standard method.
 
-Záhlaví (1 bajt):
+Header (1 byte):
   MSB                    LSB
    7    6    5    4    3    2    1    0
-  [huf][ans][flg][dlt][dlt][vzo][vzo][vzo]
+  [huf][ans][flg][dlt][dlt][smp][smp][smp]
 
   bit 7:   nibble Huffman (1=ON)
-  bit 6:   µANS komprese (1=ON)
-  bit 5:   flagování nulových bajtů (1=ON)
-  bit 4-3: delta: 00=žádná, 01=1B, 10=2B, 11=FULL (big-int s carry)
-  bit 2-0: číslo vzorku 0-6 (0 = keyframe, 7 = vyhrazeno pro verzi protokolu)
+  bit 6:   µANS compression (1=ON)
+  bit 5:   zero-byte flagging (1=ON)
+  bit 4-3: delta: 00=none, 01=1B, 10=2B, 11=FULL (big-int with carry)
+  bit 2-0: sample number 0-6 (0 = keyframe, 7 = reserved for protocol version)
 
-  Kombinace bit 7 + bit 5 = FLAG+HUF
+  Combination bit 7 + bit 5 = FLAG+HUF
 
-Poznámky k implementaci:
-  Kód odpovídá C implementaci na ATmega328 — stejná logika,
-  stejné datové typy (uint8_t / uint16_t), stejné optimalizace:
-  [Z1] µANS state = uint16_t (rozsah 32..8191)
-  [Z2] uint8_t indexy ve smyčkách
-  [Z3] popcount LUT (256B ROM v C, tuple v Pythonu)
-  [Z4] rotující maska v FLAG místo variable shift
-  [Z5] delta + ZigZag v jednom průchodu
-  [Z6] ANS rotace bajtu místo (byte >> j) & 1
-  [Z7] ANS skládání bajtu shiftem doleva (žádná reverze v dekodéru)
-  [Z8] ANS countdown smyčka (od len-1 dolů)
-  [P3] HUF bit buffer uint16_t s flush per nibble
-  [P4] DELTA_FULL — big-int s carry propagací
-  [P5] ANS early exit per bajt
-  [P6] FLAG early exit per bajt, rotující maska
-  [P7] FLAG+HUF kombinovaný režim
-  [P8] 4-cestný výběr s předáváním best_size jako limitu
+Implementation notes:
+  Code mirrors the C implementation for ATmega328 — same logic,
+  same data types (uint8_t / uint16_t), same optimisations:
+  [Z1] µANS state = uint16_t (range 32..8191)
+  [Z2] uint8_t indices in loops
+  [Z3] popcount LUT (256 B ROM in C, tuple in Python)
+  [Z4] rotating mask in FLAG instead of variable shift
+  [Z5] delta + ZigZag in a single pass
+  [Z6] ANS byte rotation instead of (byte >> j) & 1
+  [Z7] ANS byte assembly by left-shift (no reversal in decoder)
+  [Z8] ANS countdown loop (from len-1 downward)
+  [P3] HUF bit buffer uint16_t with flush per nibble
+  [P4] DELTA_FULL — big-int with carry propagation
+  [P5] ANS early exit per byte
+  [P6] FLAG early exit per byte, rotating mask
+  [P7] FLAG+HUF combined mode
+  [P8] 4-way selection passing best_size as limit
 
-Licence: MIT
+License: MIT
 NIC — Native Intellect Community
 https://github.com/Project-NIC
 """
@@ -45,24 +45,24 @@ https://github.com/Project-NIC
 __version__ = "0.1.0"
 
 # ---------------------------------------------------------------------------
-# Konstanty — odpovídají #define v C hlavičce
+# Constants — match the #define values in the C header
 # ---------------------------------------------------------------------------
 
-# Kalibrováno na kombinovaný meteo+GPS dataset (viz benchmarky)
+# Calibrated on the combined meteo+GPS dataset (see benchmarks)
 ANS_SCALE    = 32    # uint8_t
-ANS_WEIGHT_0 = 29    # uint8_t — váha nulového bitu
-ANS_WEIGHT_1 = 3     # uint8_t — váha jedničkového bitu
+ANS_WEIGHT_0 = 29    # uint8_t — weight of zero bit
+ANS_WEIGHT_1 = 3     # uint8_t — weight of one bit
 
 DELTA_NONE = 0
 DELTA_1B   = 1
 DELTA_2B   = 2
-DELTA_FULL = 3       # [P4] big-int s carry propagací
+DELTA_FULL = 3       # [P4] big-int with carry propagation
 
-# Hodnota 7 u vzorku je vyhrazena pro verzování protokolu, cyklus je tedy zkrácen
+# Sample value 7 is reserved for protocol versioning, so the cycle is shortened
 DMD_KEYFRAME_EVERY = 7
 
 # ---------------------------------------------------------------------------
-# [Z3] Popcount LUT — 256 hodnot, odpovídá PROGMEM tabulce v C
+# [Z3] Popcount LUT — 256 values, mirrors the PROGMEM table in C
 # ---------------------------------------------------------------------------
 
 _POPCOUNT_LUT = (
@@ -77,16 +77,16 @@ _POPCOUNT_LUT = (
 )
 
 def _count_onebits(data: bytes) -> int:
-    """Počet jedničkových bitů — odpovídá count_ones() v C."""
+    """Count set bits — mirrors count_ones() in C."""
     n = 0
     for b in data:
         n += _POPCOUNT_LUT[b]
     return n
 
 # ---------------------------------------------------------------------------
-# [P2] Pevná nibble Huffman tabulka v ROM
-# Natrénovaná na kombinovaných datech (meteo + GPS) po delta+ZZ
-# 64B ROM — hi nibble kódy + lo nibble kódy
+# [P2] Fixed nibble Huffman table in ROM
+# Trained on combined data (meteo + GPS) after delta+ZZ
+# 64 B ROM — hi nibble codes + lo nibble codes
 # ---------------------------------------------------------------------------
 
 _HUF_HI_LEN  = (1, 3, 3, 4, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6)
@@ -129,31 +129,31 @@ _HUF_LO_CODE = (
     0x18,  # 0xF
 )
 
-# [N1] Precomputované masky pro optimalizaci bitových operací.
-# Musí pokrýt celý 16bitový bit buffer — bit_cnt může po naplnění
-# dosáhnout až 13 (5 zbylých + 8 dočtených), takže 9 položek nestačilo.
+# [N1] Precomputed masks for bit operations.
+# Must cover the full 16-bit bit buffer — bit_cnt can reach up to 13
+# (5 remaining + 8 freshly loaded), so 9 entries would not suffice.
 _MASKS = tuple((1 << i) - 1 for i in range(17))
 
 # ---------------------------------------------------------------------------
-# [P3] Nibble Huffman enkódování
-# Bit buffer uint16_t s flush per nibble — přesně jako C implementace.
-# Formát výstupu: [1B platných bitů v posl. bajtu][stream MSB-first]
+# [P3] Nibble Huffman encoding
+# uint16_t bit buffer with flush per nibble — exactly as in C.
+# Output format: [1 B valid bits in last byte][stream MSB-first]
 # ---------------------------------------------------------------------------
 
 def _huffman_encode(data: bytes, limit: int) -> bytes | None:
     """
-    Zakóduj data nibble Huffmanem.
-    limit = max přípustná délka výstupu včetně 1B hlavičky.
-    Vrátí None pokud výsledek >= limit. [P3] early exit.
+    Encode data with nibble Huffman.
+    limit = maximum allowed output length including the 1 B header.
+    Returns None if result >= limit. [P3] early exit.
     """
     if limit < 2:
         return None
 
-    # [P3] uint16_t bit buffer s flush per nibble
+    # [P3] uint16_t bit buffer with flush per nibble
     bit_buf    = 0       # uint16_t
     bit_cnt    = 0       # uint8_t
     out        = bytearray(limit)
-    out_pos    = 1       # out[0] vyhradíme pro "valid bits"
+    out_pos    = 1       # out[0] reserved for "valid bits"
     total_bits = 0
     bits_cap   = (limit - 1) * 8   # uint16_t
 
@@ -188,20 +188,20 @@ def _huffman_encode(data: bytes, limit: int) -> bytes | None:
             out_pos += 1
         bit_buf &= (1 << bit_cnt) - 1
 
-    # Flush zbývající bity — zarovnání k MSB
+    # Flush remaining bits — align to MSB
     if bit_cnt > 0:
         out[out_pos] = (bit_buf << (8 - bit_cnt)) & 0xFF
         out_pos += 1
-        out[0] = bit_cnt       # validních bitů v posledním bajtu (1..7)
+        out[0] = bit_cnt       # valid bits in last byte (1..7)
     else:
-        out[0] = 8             # poslední bajt je plný
+        out[0] = 8             # last byte is full
 
     return bytes(out[:out_pos])
 
 
 # ---------------------------------------------------------------------------
-# [P3] Nibble Huffman dekódování
-# Bit buffer uint16_t — přesně jako C implementace.
+# [P3] Nibble Huffman decoding
+# uint16_t bit buffer — exactly as in C.
 # ---------------------------------------------------------------------------
 
 def _huf_decode_nibble(stream: bytes, stream_len: int,
@@ -209,10 +209,10 @@ def _huf_decode_nibble(stream: bytes, stream_len: int,
                        valid_last: int,
                        codes_tab: tuple, lens_tab: tuple) -> int:
     """
-    Dekóduj jeden nibble z bit bufferu.
-    in_pos, bit_buf, bit_cnt jsou jednoprvkové listy (mutable reference).
+    Decode one nibble from the bit buffer.
+    in_pos, bit_buf, bit_cnt are single-element lists (mutable references).
     """
-    # Načti dost bitů — max kód je 6 bitů
+    # Load enough bits — max code is 6 bits
     while bit_cnt[0] < 6 and in_pos[0] < stream_len:
         next_byte = stream[in_pos[0]]
         in_pos[0] += 1
@@ -223,19 +223,19 @@ def _huf_decode_nibble(stream: bytes, stream_len: int,
             bit_buf[0] = ((bit_buf[0] << 8) | next_byte) & 0xFFFF
             bit_cnt[0] += 8
 
-    # Vyzkoušej každý symbol
+    # Try every symbol
     for sym in range(16):
         code_len = lens_tab[sym]
         if bit_cnt[0] < code_len:
             continue
-        # [N1] Použití předpočítané masky místo (1 << code_len) - 1
+        # [N1] Use precomputed mask instead of (1 << code_len) - 1
         peek = (bit_buf[0] >> (bit_cnt[0] - code_len)) & _MASKS[code_len]
         if peek == codes_tab[sym]:
             bit_cnt[0] -= code_len
             bit_buf[0] &= _MASKS[bit_cnt[0]]
             return sym
 
-    # [V3] Tvrdá kontrola chyb
+    # [V3] Hard error check
     raise ValueError(f"Invalid Huffman code at index {in_pos[0]}")
 
 
@@ -246,7 +246,7 @@ def _huffman_decode(data: bytes, n_symbols: int) -> bytes:
     stream     = data[1:]
     stream_len = len(stream)
 
-    # Mutable reference pro in_pos, bit_buf, bit_cnt
+    # Mutable references for in_pos, bit_buf, bit_cnt
     in_pos  = [0]
     bit_buf = [0]
     bit_cnt = [0]
@@ -262,12 +262,12 @@ def _huffman_decode(data: bytes, n_symbols: int) -> bytes:
 
 
 # ---------------------------------------------------------------------------
-# Záhlaví
+# Header
 # ---------------------------------------------------------------------------
 
 def _build_header(sample_num: int, use_huf: bool, use_ans: bool,
                   use_flag: bool, delta_type: int) -> int:
-    # [V4] Hodnota 7 je rezervována pro budoucí rozšíření protokolu
+    # [V4] Value 7 is reserved for future protocol extensions
     h  = sample_num & 0x07
     h |= (delta_type & 0x03) << 3
     if use_flag: h |= (1 << 5)
@@ -278,7 +278,7 @@ def _build_header(sample_num: int, use_huf: bool, use_ans: bool,
 
 def _parse_header(h: int) -> dict:
     sample_num = h & 0x07
-    # [V4] Zamezení zpracování nepodporované verze
+    # [V4] Reject unsupported protocol version
     if sample_num == 7:
         raise ValueError("Unsupported protocol version (sample_num=7 is reserved)")
     return {
@@ -291,11 +291,11 @@ def _parse_header(h: int) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# ZigZag — odpovídá int8_t aritmetice v C
+# ZigZag — mirrors int8_t arithmetic in C
 # ---------------------------------------------------------------------------
 
 def _zigzag_enc(x: int) -> int:
-    s = x if x <= 127 else x - 256   # uint8_t → int8_t
+    s = x if x <= 127 else x - 256   # uint8_t -> int8_t
     return ((s << 1) ^ (s >> 7)) & 0xFF
 
 
@@ -304,13 +304,13 @@ def _zigzag_dec(x: int) -> int:
 
 
 # ---------------------------------------------------------------------------
-# [Z5] Delta enkódování + ZigZag v jednom průchodu
-# [P4] DELTA_FULL — big-int odečet s carry propagací od LSB k MSB
+# [Z5] Delta encoding + ZigZag in a single pass
+# [P4] DELTA_FULL — big-int subtraction with carry propagation LSB to MSB
 # ---------------------------------------------------------------------------
 
 def _delta_encode_zz(current: bytes, previous: bytes,
                      delta_type: int) -> bytearray:
-    """Delta enkódování + ZigZag v jednom průchodu. [Z5]"""
+    """Delta encoding + ZigZag in a single pass. [Z5]"""
     n = len(current)
     out = bytearray(n)
 
@@ -321,7 +321,7 @@ def _delta_encode_zz(current: bytes, previous: bytes,
         return out
 
     if delta_type == DELTA_FULL:
-        # [P4] Big-int odečet — od LSB (konec bufferu) k MSB, neseme borrow
+        # [P4] Big-int subtraction — from LSB (end of buffer) to MSB, carry borrow
         borrow = 0
         i = n - 1
         while i >= 0:
@@ -332,7 +332,7 @@ def _delta_encode_zz(current: bytes, previous: bytes,
             i -= 1
         return out
 
-    # DELTA_2B — po 16-bit slovech big-endian
+    # DELTA_2B — per 16-bit big-endian word
     i = 0
     while i < n:
         if i + 1 < n:
@@ -351,7 +351,7 @@ def _delta_encode_zz(current: bytes, previous: bytes,
 
 def _delta_decode_zz(data: bytes, previous: bytes,
                      delta_type: int) -> bytearray:
-    """Inverzní ZigZag + delta dekódování v jednom průchodu. [Z5]"""
+    """Inverse ZigZag + delta decoding in a single pass. [Z5]"""
     n = len(data)
     out = bytearray(n)
 
@@ -362,7 +362,7 @@ def _delta_decode_zz(data: bytes, previous: bytes,
         return out
 
     if delta_type == DELTA_FULL:
-        # [P4] Big-int součet s carry od LSB k MSB
+        # [P4] Big-int addition with carry LSB to MSB
         carry = 0
         i = n - 1
         while i >= 0:
@@ -393,19 +393,19 @@ def _delta_decode_zz(data: bytes, previous: bytes,
 
 
 # ---------------------------------------------------------------------------
-# [Z1][Z6][Z7][Z8] µANS enkódování / dekódování
-# state = uint16_t (rozsah 32..8191)
-# [Z6] rotace bajtu místo (byte >> j) & 1
-# [Z7] skládání bajtu shiftem doleva v dekodéru (žádná reverze)
-# [Z8] countdown smyčka od len-1 dolů
-# [P5] early exit per bajt podle délky output streamu
-# Výstup: [1B délka][2B state big-endian][stream]
+# [Z1][Z6][Z7][Z8] µANS encoding / decoding
+# state = uint16_t (range 32..8191)
+# [Z6] byte rotation instead of (byte >> j) & 1
+# [Z7] byte assembly by left-shift in decoder (no reversal)
+# [Z8] countdown loop from len-1 downward
+# [P5] early exit per byte based on output stream length
+# Output: [1 B length][2 B state big-endian][stream]
 # ---------------------------------------------------------------------------
 
 def _uans_encode(data: bytes, limit: int) -> bytes | None:
     """
-    limit = max délka celého výstupu. Stream smí být max limit-3 bajtů.
-    Vrátí None pokud přeteče. [P5] early exit.
+    limit = maximum total output length. Stream may be at most limit-3 bytes.
+    Returns None if overflow occurs. [P5] early exit.
     """
     n      = len(data)
     state  = ANS_SCALE   # uint16_t
@@ -415,18 +415,22 @@ def _uans_encode(data: bytes, limit: int) -> bytes | None:
         return None
     stream_limit = limit - 3
 
-    # [Z8] countdown od n-1 dolů
+    # [Z8] countdown from n-1 downward
     bi = n - 1
     while bi >= 0:
         byte = data[bi]
 
-        # [Z6] rotace bajtu — bit vždy z LSB
+        # [Z6] byte rotation — bit always from LSB
         for _ in range(8):
             bit    = byte & 1          # uint8_t
             weight = ANS_WEIGHT_0 if bit == 0 else ANS_WEIGHT_1
-            byte   = byte >> 1         # rotace
+            byte   = byte >> 1         # rotate
 
             while state >= weight * 256:
+                # [P5] Hard bound inside the bit loop — mirrors C implementation.
+                # Behaviour is unchanged: any packet that would overflow is rejected.
+                if len(output) >= stream_limit:
+                    return None
                 output.append(state & 0xFF)
                 state >>= 8
 
@@ -434,7 +438,7 @@ def _uans_encode(data: bytes, limit: int) -> bytes | None:
                   + (0 if bit == 0 else ANS_WEIGHT_0) \
                   + (state % weight)
 
-        # [P5] Early exit po každém bajtu
+        # [P5] Early exit after each byte
         if len(output) >= stream_limit:
             return None
 
@@ -448,7 +452,7 @@ def _uans_encode(data: bytes, limit: int) -> bytes | None:
     result[0] = n & 0xFF
     result[1] = (state >> 8) & 0xFF
     result[2] = state & 0xFF
-    # stream pozpátku
+    # stream reversed
     for i in range(len(output)):
         result[3 + i] = output[len(output) - 1 - i]
 
@@ -457,13 +461,13 @@ def _uans_encode(data: bytes, limit: int) -> bytes | None:
 
 def _uans_decode(data: bytes) -> bytes:
     length     = data[0]                               # uint8_t
-    state      = ((data[1] << 8) | data[2]) & 0xFFFF # uint16_t
+    state      = ((data[1] << 8) | data[2]) & 0xFFFF  # uint16_t
     si         = 3
     stream_end = len(data)
     result     = bytearray(length)
 
     for i in range(length):
-        # [Z7] skládání bajtu shiftem doleva — bity přicházejí MSB-first
+        # [Z7] byte assembly by left-shift — bits arrive MSB-first
         byte = 0
         for _ in range(8):
             pos = state % ANS_SCALE     # uint8_t
@@ -476,7 +480,7 @@ def _uans_decode(data: bytes) -> bytes:
                 weight = ANS_WEIGHT_1
                 offset = pos - ANS_WEIGHT_0
 
-            # [Z7] shift doleva — žádná reverze na konci
+            # [Z7] left-shift — no reversal at the end
             byte = ((byte << 1) | bit) & 0xFF
 
             state = (weight * (state // ANS_SCALE) + offset) & 0xFFFF
@@ -491,30 +495,30 @@ def _uans_decode(data: bytes) -> bytes:
 
 
 # ---------------------------------------------------------------------------
-# [P6][Z4] Flagování nulových bajtů
-# Rotující maska místo variable shift [Z4]
-# Early exit per bajt [P6]
-# Formát: [1B délka][⌈N/8⌉B mapa][nenulové bajty]
+# [P6][Z4] Zero-byte flagging
+# Rotating mask instead of variable shift [Z4]
+# Early exit per byte [P6]
+# Format: [1 B length][ceil(N/8) B map][non-zero bytes]
 # ---------------------------------------------------------------------------
 
 def _flag_encode(data: bytes, limit: int) -> bytes | None:
     """
-    limit = max přípustná délka výstupu.
-    Vrátí None pokud výsledek >= limit. [P6] early exit, [Z4] rotující maska.
+    limit = maximum allowed output length.
+    Returns None if result >= limit. [P6] early exit, [Z4] rotating mask.
     """
     n        = len(data)
     map_size = (n + 7) // 8
 
-    # Quick check — minimum je 1 + map_size (samé nuly)
+    # Quick check — minimum is 1 + map_size (all zeros)
     if 1 + map_size >= limit:
         return None
 
     flag_map = bytearray(map_size)
     non_zero = bytearray()
-    nz_limit = limit - 1 - map_size   # kolik nenulových bajtů se vejde
-    nz_count = 0  # [N1] cachovaný čítač pro optimalizaci
+    nz_limit = limit - 1 - map_size   # maximum non-zero bytes that fit
+    nz_count = 0  # [N1] cached counter for optimisation
 
-    # [Z4] Rotující maska
+    # [Z4] Rotating mask
     mask    = 0x80
     map_pos = 0
 
@@ -542,7 +546,7 @@ def _flag_decode(data: bytes) -> bytes:
     nz_idx   = 1 + map_size
     result   = bytearray(n)
 
-    # [Z4] Rotující maska
+    # [Z4] Rotating mask
     mask    = 0x80
     map_pos = 1
 
@@ -562,20 +566,20 @@ def _flag_decode(data: bytes) -> bytes:
 
 
 # ---------------------------------------------------------------------------
-# [P8] Komprese jednoho paketu — 4-cestný výběr metody
+# [P8] Compression of a single packet — 4-way method selection
 # ---------------------------------------------------------------------------
 
 def dmd_compress(current: bytes, previous: bytes, sample_num: int) -> bytes:
     """
-    Komprese jednoho paketu.
-    Vrátí komprimovaná data včetně záhlaví (1B).
-    Maximální expanze: 1B (záhlaví) — nikdy nedojde ke ztrátě dat.
+    Compress a single packet.
+    Returns compressed data including the header (1 B).
+    Maximum expansion: 1 B (header) — data loss never occurs.
     """
     n_raw      = len(current)
     is_keyframe = (sample_num == 0)
 
     # ------------------------------------------------------------------
-    # Krok 1: Delta + ZigZag v jednom průchodu [Z5] — keyframe přeskočí
+    # Step 1: Delta + ZigZag in a single pass [Z5] — keyframe skips this
     # ------------------------------------------------------------------
     if is_keyframe:
         work       = bytearray(current)
@@ -596,15 +600,15 @@ def dmd_compress(current: bytes, previous: bytes, sample_num: int) -> bytes:
         delta_type = best_dt
 
     # ------------------------------------------------------------------
-    # Krok 2: Zkus kompresní kandidáty
-    # best_size = aktuálně nejmenší výsledek, předává se jako limit [P8]
+    # Step 2: Try compression candidates
+    # best_size = current smallest result, passed as limit [P8]
     # ------------------------------------------------------------------
 
     best_size      = n_raw
     winning_method = 0        # 0=RAW, 1=ANS, 2=HUF, 3=FLAG, 4=FLAG+HUF
-    payload        = bytearray(current)   # RAW záchrana
+    payload        = bytearray(current)   # RAW fallback
 
-    # (a) µANS — jen pokud zero_ratio >= 45% (práh kalibrován na meteo+GPS datasetu)
+    # (a) µANS — only if zero_ratio >= 45% (threshold calibrated on meteo+GPS dataset)
     zero_count = 0
     for b in work:
         if b == 0:
@@ -630,14 +634,14 @@ def dmd_compress(current: bytes, previous: bytes, sample_num: int) -> bytes:
         winning_method = 3
         payload        = bytearray(flag_data)
 
-    # (d) FLAG+HUF — zkouší se NEZÁVISLE na úspěchu (c), shodně s C implementací.
-    # Mapu nul si staví sám (nespoléhá na flag_data), aby fungoval i tehdy, když
-    # holá FLAG přetekla svůj limit a vrátila None — Huffman na nenulových
-    # bajtech se totiž může vejít i tam, kde plain FLAG ne.
+    # (d) FLAG+HUF — tried INDEPENDENTLY of (c), matching the C implementation.
+    # Builds its own zero map (does not rely on flag_data) so it works even when
+    # plain FLAG exceeded its limit and returned None — Huffman on non-zero bytes
+    # may still fit where plain FLAG cannot.
     map_size    = (n_raw + 7) // 8
     flag_hdr_sz = 1 + map_size
     if best_size > flag_hdr_sz + 1:
-        # Postav mapu nul + seznam nenulových bajtů z work (byte-identicky s C temp_map)
+        # Build zero map + list of non-zero bytes from work (byte-identical to C temp_map)
         temp_map    = bytearray(flag_hdr_sz)
         temp_map[0] = n_raw
         nonzero     = bytearray()
@@ -660,11 +664,11 @@ def dmd_compress(current: bytes, previous: bytes, sample_num: int) -> bytes:
                 if total < best_size:
                     best_size      = total
                     winning_method = 4
-                    # FLAG hlavička (mapa nul) + HUF stream nenulových bajtů
+                    # FLAG header (zero map) + HUF stream of non-zero bytes
                     payload = temp_map + bytearray(huf_nz)
 
     # ------------------------------------------------------------------
-    # Krok 3: nastav flagy podle vítěze
+    # Step 3: set flags based on winner
     # ------------------------------------------------------------------
     use_huf  = False
     use_ans  = False
@@ -680,7 +684,7 @@ def dmd_compress(current: bytes, previous: bytes, sample_num: int) -> bytes:
         use_huf  = True
         use_flag = True
     else:
-        # RAW záchrana — žádná komprese, žádná delta
+        # RAW fallback — no compression, no delta
         delta_type = DELTA_NONE
 
     header = _build_header(sample_num, use_huf, use_ans, use_flag, delta_type)
@@ -688,13 +692,13 @@ def dmd_compress(current: bytes, previous: bytes, sample_num: int) -> bytes:
 
 
 # ---------------------------------------------------------------------------
-# Dekomprese jednoho paketu
+# Decompression of a single packet
 # ---------------------------------------------------------------------------
 
 def dmd_decompress(data: bytes, previous: bytes) -> bytes:
     """
-    Dekomprese jednoho paketu.
-    previous musí být předchozí dekomprimovaný paket stejné délky.
+    Decompress a single packet.
+    previous must be the previously decompressed packet of the same length.
     """
     h          = _parse_header(data[0])
     payload    = data[1:]
@@ -702,16 +706,16 @@ def dmd_decompress(data: bytes, previous: bytes) -> bytes:
     delta_type = h['delta_type']
     pkt_len    = len(previous)
 
-    # Vrstva 1: dekomprimuj payload
+    # Layer 1: decompress payload
     if h['use_huf'] and h['use_flag']:
-        # [P7] FLAG+HUF — FLAG mapa + Huffman na nenulových bajtech
+        # [P7] FLAG+HUF — FLAG map + Huffman on non-zero bytes
         n        = payload[0]
         map_size = (n + 7) // 8
         flag_map = payload[1:1 + map_size]
         huf_part = payload[1 + map_size:]
         huf_part_len = payload_len - 1 - map_size
 
-        # Počet nenulových bajtů z mapy — [Z4] rotující maska
+        # Count non-zero bytes from the map — [Z4] rotating mask
         n_nonzero = 0
         mask      = 0x80
         map_pos   = 0
@@ -723,10 +727,10 @@ def dmd_decompress(data: bytes, previous: bytes) -> bytes:
                 mask = 0x80
                 map_pos += 1
 
-        # Dekomprimuj nenulové bajty
+        # Decompress non-zero bytes
         nonzero = _huffman_decode(huf_part, n_nonzero)
 
-        # Rekonstruuj work — [Z4] rotující maska
+        # Reconstruct work — [Z4] rotating mask
         work    = bytearray(n)
         mask    = 0x80
         map_pos = 0
@@ -754,7 +758,7 @@ def dmd_decompress(data: bytes, previous: bytes) -> bytes:
             return bytes(payload[:pkt_len])
         work = bytearray(payload[:pkt_len])
 
-    # Vrstva 2: inverzní ZigZag + inverzní delta v jednom průchodu [Z5]
+    # Layer 2: inverse ZigZag + inverse delta in a single pass [Z5]
     if delta_type != DELTA_NONE:
         return bytes(_delta_decode_zz(work, previous, delta_type))
 
@@ -762,11 +766,11 @@ def dmd_decompress(data: bytes, previous: bytes) -> bytes:
 
 
 # ---------------------------------------------------------------------------
-# Stavový enkodér / dekodér
+# Stateful encoder / decoder
 # ---------------------------------------------------------------------------
 
 class DmdEncoder:
-    """Stavový enkodér — jeden objekt na komunikační kanál."""
+    """Stateful encoder — one instance per communication channel."""
 
     def __init__(self, pkt_len: int):
         self.pkt_len    = pkt_len & 0xFF    # uint8_t
@@ -775,7 +779,7 @@ class DmdEncoder:
 
     def compress(self, data: bytes) -> bytes:
         assert len(data) == self.pkt_len, \
-            f"Délka dat {len(data)} != pkt_len {self.pkt_len}"
+            f"Data length {len(data)} != pkt_len {self.pkt_len}"
         result          = dmd_compress(data, self.previous, self.sample_num)
         self.previous   = data
         self.sample_num = (self.sample_num + 1) % DMD_KEYFRAME_EVERY
@@ -787,7 +791,7 @@ class DmdEncoder:
 
 
 class DmdDecoder:
-    """Stavový dekodér — jeden objekt na komunikační kanál."""
+    """Stateful decoder — one instance per communication channel."""
 
     def __init__(self, pkt_len: int):
         self.pkt_len  = pkt_len & 0xFF    # uint8_t

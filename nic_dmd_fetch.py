@@ -1,11 +1,11 @@
 """
-Společné funkce pro stahování dat.
+Shared helper functions for data fetching.
 """
 import requests
 import math
 import logging
 
-# Nastavení logování pro zaznamenávání chyb (polykání výjimek vyřešeno)
+# Configure logging to capture errors (exception swallowing resolved)
 logging.basicConfig(level=logging.WARNING, format='%(levelname)s: %(message)s')
 
 SESSION = requests.Session()

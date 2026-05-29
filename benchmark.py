@@ -1,18 +1,18 @@
 """
-Srovnání kompresních metod pro embedded
+Compression method comparison for embedded
 ===============================================
-Férové srovnání — každá metoda vrátí kompletní paket připravený na přenos.
-Stejně jako NIC protokol — záhlaví + vše co dekodér potřebuje.
+Fair comparison — every method returns a complete packet ready for transmission.
+Same as the NIC protocol — header + everything the decoder needs.
 
-Formát paketů:
-  NIC:       [1B záhlaví][payload — vše co dekodér potřebuje]
-  RAW:       [1B typ=0x00][data]
-  Heatshrink:[1B typ][1B délka orig][komprimovaná data]
-  Huffman:   [1B typ][1B délka orig][1B platných bitů v posl.bajtu][bity]
+Packet format:
+  NIC:        [1B header][payload — everything the decoder needs]
+  RAW:        [1B type=0x00][data]
+  Heatshrink: [1B type][1B original length][compressed data]
+  Huffman:    [1B type][1B original length][1B valid bits in last byte][bits]
 
-Záchrana: pokud komprimovaný paket >= RAW → pošli RAW
+Fallback: if compressed packet >= RAW → send RAW
 
-Závislosti: pip install requests heatshrink2
+Dependencies: pip install requests heatshrink2
 """
 
 import struct, math, heapq, random, sys
@@ -31,7 +31,7 @@ from nic_dmd_utils import dmd_analyze_packets as analyze_packets, dmd_print_summ
 
     
 # ---------------------------------------------------------------------------
-# Převod dat
+# Data conversion
 # ---------------------------------------------------------------------------
 
 def pack_16b(row):
@@ -122,7 +122,7 @@ def to_packets(h, bits=16, limit=2000):
     return packets
 
 # ---------------------------------------------------------------------------
-# Huffman
+# Huffman (adaptive, trained on a static baseline dataset)
 # ---------------------------------------------------------------------------
 
 def build_huffman(packets_sample):
@@ -142,7 +142,7 @@ def build_huffman(packets_sample):
         heapq.heappush(heap,[lo[0]+hi[0]]+lo[1:]+hi[1:])
     return {s:c for s,c in heap[0][1:]}
 
-# Statická tabulka natrénovaná na neutrálních datech
+# Static table trained on neutral data
 random.seed(999)
 _sp = []
 _t,_h,_p,_w = -500,7000,3850,800
@@ -157,7 +157,7 @@ STATIC_TABLE_ROM_BYTES = sum(math.ceil(len(c)/8)+1 for c in STATIC_CODES.values(
 
 def huffman_encode_packet(pkt, prev, codes, typ_byte):
     """
-    Zakóduje jeden paket Huffmanem do přenosového formátu.
-    Formát: [1B typ][1B délka orig][1B platných bitů][bity v bajtech]
-    Záchrana: [1B typ=0xFF][data] pokud větší než RAW
+    Encode one packet with Huffman into the transmission format.
+    Format: [1B type][1B original length][1B valid bits][bits in bytes]
+    Fallback: [1B type=0xFF][data] if larger than RAW
     """

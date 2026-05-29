@@ -1,25 +1,25 @@
 """
-NIC DMD — Fetcher reálných dat
+NIC DMD — Real-data fetcher
 ================================
-Více zdrojů dat pro benchmark bez závislosti na archive-api.open-meteo.com
+Multiple data sources for benchmarking without dependency on archive-api.open-meteo.com
 
-Zdroje:
-  1. DWD SYNOP       — německé meteostanice, 10min data (ověřeno funkční)
-  2. Open-Meteo      — forecast API (spolehlivější než archive)
-  3. USGS Earthquake — seismická data (malé delty souřadnic)
-  4. NOAA Tides      — výška hladiny moře (pomalé změny)
-  5. Open-Meteo AQ   — kvalita ovzduší (PM2.5, NO2, O3...)
-  6. GPS syntetická  — trek Alpy (offline, vždy dostupné)
-  7. Elektroměr syn. — simulace odběru (offline, vždy dostupné)
-  8. Senzor sítě     — simulace IoT senzorů (offline)
+Sources:
+  1. DWD SYNOP       — German weather stations, 10-min data (verified working)
+  2. Open-Meteo      — forecast API (more reliable than archive)
+  3. USGS Earthquake — seismic data (small coordinate deltas)
+  4. NOAA Tides      — sea level height (slow changes)
+  5. Open-Meteo AQ   — air quality (PM2.5, NO2, O3...)
+  6. GPS synthetic   — Alps trek (offline, always available)
+  7. Smart meter syn.— consumption simulation (offline, always available)
+  8. IoT sensor net  — IoT sensor simulation (offline)
 
-Závislosti: pip install requests
+Dependencies: pip install requests
 """
 
 import os, sys, struct, math, random, time, csv, zipfile, io, logging
 import requests
 from nic_dmd_utils import dmd_analyze_packets as analyze_packets, dmd_print_summary as print_summary
-# Import sjednocených funkcí
+# Import shared fetch helpers
 from nic_dmd_fetch import clamp16, safe_float, get_session
 
 OUTPUT_DIR = "real_data_plus"
@@ -31,7 +31,7 @@ if sys.platform == 'win32':
 SESSION = get_session()
 
 # ---------------------------------------------------------------------------
-# Pomocné funkce
+# Helper functions
 # ---------------------------------------------------------------------------
 
 def save_report(results, filename):
@@ -43,14 +43,14 @@ def save_report(results, filename):
     print(f"  Report: {path}")
 
 # ---------------------------------------------------------------------------
-# 1. DWD SYNOP — meteostanice Německo
+# 1. DWD SYNOP — German weather stations
 # ---------------------------------------------------------------------------
 
 DWD_STATIONS = {
     '00691': 'Zugspitze (2962m)',
     '05792': 'Fichtelberg (1213m)',
-    '01975': 'Helgoland (pobřeží)',
-    '03456': 'München',
+    '01975': 'Helgoland (coast)',
+    '03456': 'Munich',
     '00433': 'Berlin-Tempelhof',
 }
 
@@ -62,7 +62,7 @@ def fetch_dwd_synop(station_id='00691', limit=10000):
     try:
         r = SESSION.get(url, timeout=30); r.raise_for_status()
     except Exception as e:
-        logging.warning(f"Chyba při stahování DWD dat pro {station_id}", exc_info=True)
+        logging.warning(f"Failed to download DWD data for {station_id}", exc_info=True)
         return None
 
     try:
@@ -70,7 +70,7 @@ def fetch_dwd_synop(station_id='00691', limit=10000):
         df = [f for f in z.namelist() if f.startswith('produkt_')][0]
         content = z.read(df).decode('latin-1')
     except Exception as e:
-        logging.warning(f"Chyba při rozbalování DWD archivu", exc_info=True)
+        logging.warning(f"Failed to extract DWD archive", exc_info=True)
         return None
 
     reader = csv.reader(content.strip().split('\n'), delimiter=';')
@@ -97,11 +97,11 @@ def fetch_dwd_synop(station_id='00691', limit=10000):
                 return d if v in ['-999','-999.0','','eor'] else safe_float(v, d)
 
             pkt = struct.pack('>8h',
-                clamp16(sf(idx_tt)  * 100),            # teplota 2m °C×100
-                clamp16(sf(idx_rf)  * 100),            # vlhkost %×100
-                clamp16((sf(idx_pp, 1013.0)-900)*10), # tlak (hPa-900)×10
-                clamp16(sf(idx_td)  * 100),            # rosný bod °C×100
-                clamp16(sf(idx_tm5) * 100),            # teplota 5cm °C×100
+                clamp16(sf(idx_tt)  * 100),            # air temp 2m °C×100
+                clamp16(sf(idx_rf)  * 100),            # humidity %×100
+                clamp16((sf(idx_pp, 1013.0)-900)*10), # pressure (hPa-900)×10
+                clamp16(sf(idx_td)  * 100),            # dew point °C×100
+                clamp16(sf(idx_tm5) * 100),            # temp 5cm °C×100
                 0, 0, 0
             )
             packets.append(pkt)
@@ -110,11 +110,11 @@ def fetch_dwd_synop(station_id='00691', limit=10000):
         except Exception: 
             continue
 
-    print(f"  Načteno {len(packets)} vzorků × 16B")
+    print(f"  Loaded {len(packets)} samples × 16B")
     return packets, timestamps
 
 # ---------------------------------------------------------------------------
-# 2. Open-Meteo FORECAST — spolehlivější než archive
+# 2. Open-Meteo FORECAST — more reliable than archive
 # ---------------------------------------------------------------------------
 
 FORECAST_LOCATIONS = [
@@ -122,10 +122,10 @@ FORECAST_LOCATIONS = [
     ('Brno',       49.1951, 16.6068),
     ('Ostrava',    49.8209, 18.2625),
     ('Bratislava', 48.1486, 17.1077),
-    ('Vídeň',      48.2082, 16.3738),
-    ('Mnichov',    48.1351, 11.5820),
-    ('Varšava',    52.2297, 21.0122),
-    ('Budapešť',   47.4979, 19.0402),
+    ('Vienna',     48.2082, 16.3738),
+    ('Munich',     48.1351, 11.5820),
+    ('Warsaw',     52.2297, 21.0122),
+    ('Budapest',   47.4979, 19.0402),
 ]
 
 def fetch_open_meteo_forecast(lat, lon, name, limit=10000):
@@ -150,7 +150,7 @@ def fetch_open_meteo_forecast(lat, lon, name, limit=10000):
         r = SESSION.get(url, params=params, timeout=20); r.raise_for_status()
         h = r.json()["hourly"]
     except Exception as e:
-        logging.warning(f"Chyba při stahování Open-Meteo forecast pro {name}", exc_info=True)
+        logging.warning(f"Failed to download Open-Meteo forecast for {name}", exc_info=True)
         return None
 
     def g(key, d=0.0, i=0):
@@ -174,7 +174,7 @@ def fetch_open_meteo_forecast(lat, lon, name, limit=10000):
         packets.append(pkt16)
         timestamps.append(h['time'][i] if i < len(h.get('time',[])) else str(i))
 
-    print(f"  Načteno {len(packets)} vzorků × 16B")
+    print(f"  Loaded {len(packets)} samples × 16B")
     return packets, timestamps
 
 def fetch_open_meteo_forecast_32b(lat, lon, name, limit=10000):
@@ -199,7 +199,7 @@ def fetch_open_meteo_forecast_32b(lat, lon, name, limit=10000):
         r = SESSION.get(url, params=params, timeout=20); r.raise_for_status()
         h = r.json()["hourly"]
     except Exception as e:
-        logging.warning(f"Chyba při stahování Open-Meteo forecast 32B pro {name}", exc_info=True)
+        logging.warning(f"Failed to download Open-Meteo forecast 32B for {name}", exc_info=True)
         return None
 
     def g(key, d=0.0, i=0):
@@ -231,7 +231,7 @@ def fetch_open_meteo_forecast_32b(lat, lon, name, limit=10000):
         packets.append(pkt32)
         timestamps.append(h['time'][i] if i < len(h.get('time',[])) else str(i))
 
-    print(f"  Načteno {len(packets)} vzorků × 32B")
+    print(f"  Loaded {len(packets)} samples × 32B")
     return packets, timestamps
 
 # ---------------------------------------------------------------------------
@@ -256,7 +256,7 @@ def fetch_open_meteo_airquality(lat, lon, name, limit=10000):
         r = SESSION.get(url, params=params, timeout=20); r.raise_for_status()
         h = r.json()["hourly"]
     except Exception as e:
-        logging.warning(f"Chyba při stahování Open-Meteo AirQuality pro {name}", exc_info=True)
+        logging.warning(f"Failed to download Open-Meteo AirQuality for {name}", exc_info=True)
         return None
 
     def g(key, d=0.0, i=0):
@@ -268,7 +268,7 @@ def fetch_open_meteo_airquality(lat, lon, name, limit=10000):
     packets = []; timestamps = []
     for i in range(n):
         pkt = struct.pack('>8h',
-            clamp16(g('pm10',0,i)               * 100),  # μg/m³ × 100
+            clamp16(g('pm10',0,i)               * 100),  # µg/m³ × 100
             clamp16(g('pm2_5',0,i)              * 100),
             clamp16(g('carbon_monoxide',0,i)    * 10),   # ppb × 10
             clamp16(g('nitrogen_dioxide',0,i)   * 100),
@@ -280,21 +280,21 @@ def fetch_open_meteo_airquality(lat, lon, name, limit=10000):
         packets.append(pkt)
         timestamps.append(h['time'][i] if i < len(h.get('time',[])) else str(i))
 
-    print(f"  Načteno {len(packets)} vzorků × 16B")
+    print(f"  Loaded {len(packets)} samples × 16B")
     return packets, timestamps
 
 # ---------------------------------------------------------------------------
-# 4. USGS Earthquake — seismická data
+# 4. USGS Earthquake — seismic data
 # ---------------------------------------------------------------------------
 
 def fetch_usgs_earthquakes(limit=10000):
-    print(f"\n[USGS Earthquake] posledních 30 dní")
+    print(f"\n[USGS Earthquake] last 30 days")
     url = "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_month.csv"
     try:
         r = SESSION.get(url, timeout=30); r.raise_for_status()
         lines = r.text.strip().split('\n')
     except Exception as e:
-        logging.warning("Chyba při stahování USGS Earthquakes", exc_info=True)
+        logging.warning("Failed to download USGS Earthquakes", exc_info=True)
         return None
 
     reader = csv.DictReader(lines)
@@ -326,11 +326,11 @@ def fetch_usgs_earthquakes(limit=10000):
         except Exception: 
             continue
 
-    print(f"  Načteno {len(packets)} vzorků × 16B")
+    print(f"  Loaded {len(packets)} samples × 16B")
     return packets, timestamps
 
 # ---------------------------------------------------------------------------
-# 5. NOAA Tides — výška hladiny moře, hodinová data
+# 5. NOAA Tides — sea level height, hourly data
 # ---------------------------------------------------------------------------
 
 NOAA_STATIONS = {
@@ -370,14 +370,14 @@ def fetch_noaa_tides(station='8518750', limit=10000):
             r = SESSION.get(url, params=params, timeout=20); r.raise_for_status()
             data = r.json()
             if 'data' not in data:
-                print(f"  Prázdná odpověď: {data.get('error',{}).get('message','?')}")
+                print(f"  Empty response: {data.get('error',{}).get('message','?')}")
                 break
             for rec in data['data']:
                 v  = safe_float(rec.get('v', 0))
-                s  = safe_float(rec.get('s', 0))   # sigma (odchylka)
+                s  = safe_float(rec.get('s', 0))   # sigma (std dev)
                 ts = rec.get('t', '')
                 pkt = struct.pack('>8h',
-                    clamp16(v * 1000),   # výška mm
+                    clamp16(v * 1000),   # height mm
                     clamp16(s * 1000),   # sigma mm
                     0, 0, 0, 0, 0, 0
                 )
@@ -386,19 +386,19 @@ def fetch_noaa_tides(station='8518750', limit=10000):
                 if len(packets) >= limit: break
             time.sleep(0.3)
         except Exception as e:
-            logging.warning(f"Chyba při stahování NOAA chunk pro {station}", exc_info=True)
+            logging.warning(f"Failed to download NOAA chunk for {station}", exc_info=True)
             break
         cur = nxt + timedelta(days=1)
 
-    print(f"  Načteno {len(packets)} vzorků × 16B")
+    print(f"  Loaded {len(packets)} samples × 16B")
     return packets, timestamps
 
 # ---------------------------------------------------------------------------
-# 6. GPS syntetická
+# 6. GPS synthetic
 # ---------------------------------------------------------------------------
 
 def generate_gps_trek(count=10000):
-    print(f"\n[GPS syntetická] Trek Chamonix→Zermatt ({count} bodů)")
+    print(f"\n[GPS synthetic] Trek Chamonix→Zermatt ({count} points)")
     waypoints = [
         (45.9237,6.8694,1035),(45.9500,6.9000,2000),(45.9800,7.0000,2800),
         (46.0200,7.1000,2200),(46.0500,7.2000,2500),(45.9800,7.4000,1900),
@@ -429,15 +429,15 @@ def generate_gps_trek(count=10000):
         timestamps.append(f"trek_{i:05d}")
         prev_lat,prev_lon = lat,lon
 
-    print(f"  Vygenerováno {len(packets)} vzorků × 16B")
+    print(f"  Generated {len(packets)} samples × 16B")
     return packets, timestamps
 
 # ---------------------------------------------------------------------------
-# 7. Elektroměr syntetický
+# 7. Smart meter synthetic
 # ---------------------------------------------------------------------------
 
 def generate_smartmeter(count=10000):
-    print(f"\n[Elektroměr syntetický] ({count} vzorků)")
+    print(f"\n[Smart meter synthetic] ({count} samples)")
     random.seed(1234)
     packets = []; timestamps = []
 
@@ -462,15 +462,15 @@ def generate_smartmeter(count=10000):
         packets.append(pkt)
         timestamps.append(f"meter_{n:05d}")
 
-    print(f"  Vygenerováno {len(packets)} vzorků × 16B")
+    print(f"  Generated {len(packets)} samples × 16B")
     return packets, timestamps
 
 # ---------------------------------------------------------------------------
-# 8. IoT senzorová síť
+# 8. IoT sensor network
 # ---------------------------------------------------------------------------
 
 def generate_iot_building(count=10000):
-    print(f"\n[IoT budova syntetická] ({count} vzorků, 8 místností)")
+    print(f"\n[IoT building synthetic] ({count} samples, 8 rooms)")
     random.seed(5678)
     packets = []; timestamps = []
 
@@ -505,15 +505,15 @@ def generate_iot_building(count=10000):
         packets.append(pkt)
         timestamps.append(f"iot_{n:05d}")
 
-    print(f"  Vygenerováno {len(packets)} vzorků × 16B")
+    print(f"  Generated {len(packets)} samples × 16B")
     return packets, timestamps
 
 # ---------------------------------------------------------------------------
-# 9. Komplexní stanice 64B
+# 9. Complex station 64B
 # ---------------------------------------------------------------------------
 
 def generate_complex_64b(count=10000):
-    print(f"\n[Komplexní stanice 64B] ({count} vzorků)")
+    print(f"\n[Complex station 64B] ({count} samples)")
     random.seed(9999)
     packets = []; timestamps = []
 
@@ -570,15 +570,15 @@ def generate_complex_64b(count=10000):
         packets.append(pkt)
         timestamps.append(f"complex_{n:05d}")
 
-    print(f"  Vygenerováno {len(packets)} vzorků × 64B")
+    print(f"  Generated {len(packets)} samples × 64B")
     return packets, timestamps
 
 # ---------------------------------------------------------------------------
-# 10. Průmyslový senzor 128B
+# 10. Industrial sensor 128B
 # ---------------------------------------------------------------------------
 
 def generate_industrial_128b(count=10000):
-    print(f"\n[Průmyslový senzor 128B] ({count} vzorků)")
+    print(f"\n[Industrial sensor 128B] ({count} samples)")
     random.seed(7777)
     packets = []; timestamps = []
 
@@ -610,14 +610,14 @@ def generate_industrial_128b(count=10000):
         packets.append(pkt)
         timestamps.append(f"cnc_{n:05d}")
 
-    print(f"  Vygenerováno {len(packets)} vzorků × 128B")
+    print(f"  Generated {len(packets)} samples × 128B")
     return packets, timestamps
 
 if __name__ == "__main__":
     LIMIT = 10000
 
     print("=" * 70)
-    print("NIC DMD+ — Stahování a analýza reálných dat")
+    print("NIC DMD+ — Fetching and analysing real-world data")
     print("=" * 70)
 
     all_results = {}
@@ -655,17 +655,17 @@ if __name__ == "__main__":
 
     for gen_fn, name in [
         (lambda: generate_gps_trek(LIMIT),        "GPS_Trek_16B"),
-        (lambda: generate_smartmeter(LIMIT),       "Elektromery_16B"),
-        (lambda: generate_iot_building(LIMIT),     "IoT_Budova_16B"),
-        (lambda: generate_complex_64b(LIMIT),      "Komplexni_stanice_64B"),
-        (lambda: generate_industrial_128b(LIMIT),  "Prumyslovy_senzor_128B"),
+        (lambda: generate_smartmeter(LIMIT),       "SmartMeter_16B"),
+        (lambda: generate_iot_building(LIMIT),     "IoT_Building_16B"),
+        (lambda: generate_complex_64b(LIMIT),      "Complex_Station_64B"),
+        (lambda: generate_industrial_128b(LIMIT),  "Industrial_Sensor_128B"),
     ]:
         run_analysis(gen_fn(), name)
 
     print(f"\n{'='*70}")
-    print("GLOBÁLNÍ SOUHRN")
+    print("GLOBAL SUMMARY")
     print(f"{'='*70}")
-    print(f"{'Dataset':<35} {'Paketů':>7} {'Úspora%':>8} {'Chyby':>6}")
+    print(f"{'Dataset':<35} {'Packets':>7} {'Saving%':>8} {'Errors':>6}")
     print(f"{'-'*70}")
     for name, r in all_results.items():
         if not r: continue
@@ -675,5 +675,5 @@ if __name__ == "__main__":
         pct   = (1-comp/orig)*100 if orig > 0 else 0
         print(f"  {name:<33} {len(r):>7} {pct:>7.1f}% {errs:>6}")
     print(f"{'='*70}")
-    print(f"\nReporty uloženy v: {OUTPUT_DIR}/")
-    print("Hotovo!")
+    print(f"\nReports saved to: {OUTPUT_DIR}/")
+    print("Done!")
