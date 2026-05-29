@@ -1,30 +1,30 @@
 """
 NIC DMD+ — Small Packet Benchmark
 ==================================
-Stáhne stejné zdroje jako fetch_plus.py, ale každé pole zabalí do minimální
-šířky odpovídající skutečné přesnosti API. Žádné falešné nuly, žádné
-plýtvané int16 padding.
+Downloads the same sources as fetch_plus.py but packs each field into the
+minimum width that matches the actual API precision. No false zeros, no
+wasted int16 padding.
 
-Pravidla škálování:
-  • API hodnota s 1 desetinným místem → uložit ×10 v int8/uint8 (cap)
-    nebo int16/uint16 (bez cap), podle reálného rozsahu
-  • API hodnota celočíselná                → uint8 (0-255) nebo uint16
-  • API hodnota se 2 dec. místy (AOD)      → ×100 v uint8 (0-2.55)
-  • Tlak                                   → ×10 v uint16 s offsetem nebo
-                                              v rozsahu 8700-10800 (hPa×10)
-  • Souřadnice (USGS)                      → ×100 v int16 (±327.67° pokryje svět)
+Scaling rules:
+  • API value with 1 decimal place → store ×10 in int8/uint8 (capped)
+    or int16/uint16 (uncapped), based on the real value range
+  • API integer value               → uint8 (0-255) or uint16
+  • API value with 2 dec. (AOD)     → ×100 in uint8 (0-2.55)
+  • Pressure                        → ×10 in uint16 with offset or
+                                       in range 8700-10800 (hPa×10)
+  • Coordinates (USGS)              → ×100 in int16 (±327.67° covers the world)
 
-Výstupy v real_data_plus_small/:
-  • <dataset>.txt        — DMD report per paket (komprese, metoda, %úspora)
-  • <dataset>.src.txt    — raw hodnoty paketů s schema-aware sloupci
+Outputs in real_data_plus_small/:
+  • <dataset>.txt        — DMD report per packet (compression, method, % saving)
+  • <dataset>.src.txt    — raw packet values with schema-aware columns
 
-Závislosti: pip install requests
+Dependencies: pip install requests
 """
 
 import os, sys, struct, math, time, csv, zipfile, io, logging
 import requests
 from nic_dmd_utils import dmd_analyze_packets as analyze_packets, dmd_print_summary as print_summary
-# Import sjednocených funkcí
+# Import shared fetch helpers
 from nic_dmd_fetch import get_session, clamp16
 
 if sys.platform == 'win32':
@@ -35,46 +35,46 @@ OUTPUT_DIR = "real_data_plus_small"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # ---------------------------------------------------------------------------
-# Schémata: [(jméno, šířka_bajtů, signed)]
-# Suma šířek = délka paketu.
+# Schemas: [(name, byte_width, signed)]
+# Sum of widths = packet length.
 # ---------------------------------------------------------------------------
 
 SCHEMA_DWD = [
-    ('teplota_2m_C_x10',   2, True),
-    ('vlhkost_proc',        1, False),
-    ('tlak_hPa_x10',        2, False),   # uint16 ×10 (8700..10800 = 870..1080 hPa)
-    ('rosny_bod_C_x10',     2, True),
-    ('teplota_5cm_C_x10',   2, True),
+    ('temp_2m_C_x10',    2, True),
+    ('humidity_pct',     1, False),
+    ('pressure_hPa_x10', 2, False),   # uint16 ×10 (8700..10800 = 870..1080 hPa)
+    ('dew_pt_C_x10',     2, True),
+    ('temp_5cm_C_x10',   2, True),
 ]  # = 9 B
 
 SCHEMA_FORECAST_16B = [
-    ('teplota_2m_C_x10',    2, True),
-    ('vlhkost_proc',         1, False),
-    ('tlak_hPa_x10',         2, False),
-    ('vitr_ms_x10',          1, False),   # uint8 ×10, cap 25.5 m/s
-    ('srazky_mm_x10',        1, False),   # uint8 ×10, cap 25.5 mm/h
-    ('puda_0cm_C_x10',       2, True),
-    ('puda_6cm_C_x10',       2, True),
-    ('rosny_bod_C_x10',      2, True),
+    ('temp_2m_C_x10',    2, True),
+    ('humidity_pct',     1, False),
+    ('pressure_hPa_x10', 2, False),
+    ('wind_ms_x10',      1, False),   # uint8 ×10, cap 25.5 m/s
+    ('precip_mm_x10',    1, False),   # uint8 ×10, cap 25.5 mm/h
+    ('soil_0cm_C_x10',   2, True),
+    ('soil_6cm_C_x10',   2, True),
+    ('dew_pt_C_x10',     2, True),
 ]  # = 13 B
 
 SCHEMA_FORECAST_32B = [
-    ('teplota_2m_C_x10',         2, True),
-    ('vlhkost_proc',              1, False),
-    ('tlak_hPa_x10',              2, False),
-    ('vitr_ms_x10',               1, False),
-    ('smer_vetru_deg_x10',        2, False),  # uint16 0-3600
-    ('srazky_mm_x10',             1, False),
-    ('rosny_bod_C_x10',           2, True),
-    ('zdanliva_teplota_C_x10',    2, True),
-    ('oblacnost_proc',             1, False),
-    ('zareni_Wm2',                2, False),  # uint16, max ~1200
-    ('UV_index_x10',              1, False),  # uint8 ×10, cap 25.5
-    ('viditelnost_100m',          2, False),  # uint16, m/100
-    ('puda_0cm_C_x10',            2, True),
-    ('puda_6cm_C_x10',            2, True),
-    ('puda_18cm_C_x10',           2, True),
-    ('puda_54cm_C_x10',           2, True),
+    ('temp_2m_C_x10',        2, True),
+    ('humidity_pct',         1, False),
+    ('pressure_hPa_x10',     2, False),
+    ('wind_ms_x10',          1, False),
+    ('wind_dir_deg_x10',     2, False),  # uint16 0-3600
+    ('precip_mm_x10',        1, False),
+    ('dew_pt_C_x10',         2, True),
+    ('apparent_temp_C_x10',  2, True),
+    ('cloud_pct',            1, False),
+    ('radiation_Wm2',        2, False),  # uint16, max ~1200
+    ('UV_idx_x10',           1, False),  # uint8 ×10, cap 25.5
+    ('visibility_100m',      2, False),  # uint16, m/100
+    ('soil_0cm_C_x10',       2, True),
+    ('soil_6cm_C_x10',       2, True),
+    ('soil_18cm_C_x10',      2, True),
+    ('soil_54cm_C_x10',      2, True),
 ]  # = 27 B
 
 SCHEMA_AQ = [
@@ -85,23 +85,23 @@ SCHEMA_AQ = [
     ('SO2_ugm3_x10',         1, False),
     ('O3_ugm3_x10',          2, False),
     ('AOD_x100',             1, False),   # uint8 ×100 (0-2.55)
-    ('prach_ugm3',           1, False),
+    ('dust_ugm3',            1, False),
 ]  # = 12 B
 
 SCHEMA_USGS = [
-    ('lat_deg_x100',     2, True),    # i16 ×100, ±327° pokryje svět
-    ('lon_deg_x100',     2, True),
-    ('hloubka_km_x10',   2, False),   # u16 ×10
-    ('magnituda_x100',   2, True),    # i16 ×100 (může být záporná)
+    ('lat_deg_x100',    2, True),    # i16 ×100, ±327° covers the world
+    ('lon_deg_x100',    2, True),
+    ('depth_km_x10',    2, False),   # u16 ×10
+    ('magnitude_x100',  2, True),    # i16 ×100 (may be negative)
 ]  # = 8 B
 
 SCHEMA_NOAA = [
-    ('vyska_mm',     2, True),    # i16 v mm (±32m, real rozsah ±2m)
-    ('sigma_mm',     1, False),   # u8 v mm (real max ~80 mm)
+    ('height_mm',    2, True),    # i16 in mm (±32 m, real range ±2 m)
+    ('sigma_mm',     1, False),   # u8 in mm (real max ~80 mm)
 ]  # = 3 B
 
 # ---------------------------------------------------------------------------
-# Pomocné funkce
+# Helper functions
 # ---------------------------------------------------------------------------
 
 def safe(v, default=0.0):
@@ -112,7 +112,7 @@ def safe(v, default=0.0):
         return default
 
 def clamp(v, width, signed):
-    """Ořeže v do rozsahu typu o dané šířce."""
+    """Clamp v to the range of the type with the given byte width."""
     if signed:
         lo, hi = -(1 << (width*8 - 1)), (1 << (width*8 - 1)) - 1
     else:
@@ -120,7 +120,7 @@ def clamp(v, width, signed):
     return max(lo, min(hi, int(round(v))))
 
 def pack_fields(values, schema):
-    """Spakuje seznam hodnot podle schématu na bytes."""
+    """Pack a list of values according to the schema into bytes."""
     parts = []
     for v, (_name, w, signed) in zip(values, schema):
         v_clamped = clamp(v, w, signed)
@@ -136,14 +136,14 @@ def save_report(results, filename):
     print(f"  Report: {path}")
 
 def save_source(packets, timestamps, filename, schema):
-    """Surová data před DMD kompresí: rozparsovaná podle schématu."""
+    """Raw data before DMD compression: parsed according to schema."""
     path = os.path.join(OUTPUT_DIR, filename)
     total_w = sum(w for _, w, _ in schema)
     with open(path, 'w', encoding='utf-8') as f:
         if not packets:
-            f.write("(žádná data)\n"); print(f"  Source: {path}"); return
-        f.write("# Zdrojová data před DMD kompresí (schema-aware, různé šířky polí)\n")
-        f.write(f"# Paketů: {len(packets)} | Šířka paketu: {total_w}B | Polí: {len(schema)}\n")
+            f.write("(no data)\n"); print(f"  Source: {path}"); return
+        f.write("# Source data before DMD compression (schema-aware, variable field widths)\n")
+        f.write(f"# Packets: {len(packets)} | Packet width: {total_w}B | Fields: {len(schema)}\n")
         schema_str = ", ".join(f"{n}({'i' if s else 'u'}{w*8})" for n, w, s in schema)
         f.write(f"# Schema: {schema_str}\n")
         f.write("index\ttimestamp\t" + "\t".join(n for n, _, _ in schema) + "\n")
@@ -157,13 +157,13 @@ def save_source(packets, timestamps, filename, schema):
     print(f"  Source: {path}")
 
 # ---------------------------------------------------------------------------
-# 1. DWD SYNOP — 9B paket
+# 1. DWD SYNOP — 9 B packet
 # ---------------------------------------------------------------------------
 
 DWD_STATIONS = {
     '00691': 'Zugspitze (2962m)',
     '05792': 'Fichtelberg (1213m)',
-    '01975': 'Helgoland (pobřeží)',
+    '01975': 'Helgoland (coast)',
 }
 
 def fetch_dwd_small(station_id='00691', limit=10000):
@@ -177,7 +177,7 @@ def fetch_dwd_small(station_id='00691', limit=10000):
         df = [f for f in z.namelist() if f.startswith('produkt_')][0]
         content = z.read(df).decode('latin-1')
     except Exception:
-        logging.warning(f"Chyba při stahování/zpracování DWD pro {station_id}", exc_info=True)
+        logging.warning(f"Failed to download/process DWD for {station_id}", exc_info=True)
         return [], []
 
     reader = csv.reader(content.strip().split('\n'), delimiter=';')
@@ -200,9 +200,9 @@ def fetch_dwd_small(station_id='00691', limit=10000):
                 v = row[idx].strip()
                 return d if v in ['-999', '-999.0', '', 'eor'] else safe(v, d)
             vals = [
-                sf(idx_tt)  * 10,       # teplota 2m ×10
-                sf(idx_rf),              # vlhkost (0-100)
-                sf(idx_pp, 1013) * 10,  # tlak ×10
+                sf(idx_tt)  * 10,       # air temp 2m ×10
+                sf(idx_rf),              # humidity (0-100)
+                sf(idx_pp, 1013) * 10,  # pressure ×10
                 sf(idx_td)  * 10,
                 sf(idx_tm5) * 10,
             ]
@@ -211,11 +211,11 @@ def fetch_dwd_small(station_id='00691', limit=10000):
             if len(packets) >= limit: break
         except Exception:
             continue
-    print(f"  Načteno {len(packets)} vzorků × {sum(w for _,w,_ in SCHEMA_DWD)}B")
+    print(f"  Loaded {len(packets)} samples × {sum(w for _,w,_ in SCHEMA_DWD)}B")
     return packets, timestamps
 
 # ---------------------------------------------------------------------------
-# 2. Open-Meteo Forecast — 13B (16B varianta) / 27B (32B varianta)
+# 2. Open-Meteo Forecast — 13 B (16 B variant) / 27 B (32 B variant)
 # ---------------------------------------------------------------------------
 
 FORECAST_LOCATIONS = [
@@ -243,7 +243,7 @@ def fetch_forecast_small(lat, lon, name, limit=10000):
     try:
         h = _forecast_json(lat, lon, hourly, 16)
     except Exception:
-        logging.warning(f"Chyba při stahování forecast pro {name}", exc_info=True)
+        logging.warning(f"Failed to download forecast for {name}", exc_info=True)
         return [], []
     def g(k, d=0.0, i=0):
         v = h.get(k, [d]*999); v = v[i] if i < len(v) else d
@@ -263,7 +263,7 @@ def fetch_forecast_small(lat, lon, name, limit=10000):
         ]
         packets.append(pack_fields(vals, SCHEMA_FORECAST_16B))
         timestamps.append(h['time'][i] if i < len(h.get('time',[])) else str(i))
-    print(f"  Načteno {len(packets)} vzorků × {sum(w for _,w,_ in SCHEMA_FORECAST_16B)}B")
+    print(f"  Loaded {len(packets)} samples × {sum(w for _,w,_ in SCHEMA_FORECAST_16B)}B")
     return packets, timestamps
 
 def fetch_forecast_small_32b(lat, lon, name, limit=10000):
@@ -277,7 +277,7 @@ def fetch_forecast_small_32b(lat, lon, name, limit=10000):
     try:
         h = _forecast_json(lat, lon, hourly, 16)
     except Exception:
-        logging.warning(f"Chyba při stahování forecast 32B pro {name}", exc_info=True)
+        logging.warning(f"Failed to download forecast 32B for {name}", exc_info=True)
         return [], []
     def g(k, d=0.0, i=0):
         v = h.get(k, [d]*999); v = v[i] if i < len(v) else d
@@ -305,11 +305,11 @@ def fetch_forecast_small_32b(lat, lon, name, limit=10000):
         ]
         packets.append(pack_fields(vals, SCHEMA_FORECAST_32B))
         timestamps.append(h['time'][i] if i < len(h.get('time',[])) else str(i))
-    print(f"  Načteno {len(packets)} vzorků × {sum(w for _,w,_ in SCHEMA_FORECAST_32B)}B")
+    print(f"  Loaded {len(packets)} samples × {sum(w for _,w,_ in SCHEMA_FORECAST_32B)}B")
     return packets, timestamps
 
 # ---------------------------------------------------------------------------
-# 3. Open-Meteo Air Quality — 12B paket
+# 3. Open-Meteo Air Quality — 12 B packet
 # ---------------------------------------------------------------------------
 
 def fetch_aq_small(lat, lon, name, limit=10000):
@@ -323,7 +323,7 @@ def fetch_aq_small(lat, lon, name, limit=10000):
         r = SESSION.get("https://air-quality-api.open-meteo.com/v1/air-quality", params=params, timeout=20)
         r.raise_for_status(); h = r.json()["hourly"]
     except Exception:
-        logging.warning(f"Chyba při stahování AQ pro {name}", exc_info=True)
+        logging.warning(f"Failed to download AQ for {name}", exc_info=True)
         return [], []
     def g(k, d=0.0, i=0):
         v = h.get(k, [d]*999); v = v[i] if i < len(v) else d
@@ -343,21 +343,21 @@ def fetch_aq_small(lat, lon, name, limit=10000):
         ]
         packets.append(pack_fields(vals, SCHEMA_AQ))
         timestamps.append(h['time'][i] if i < len(h.get('time',[])) else str(i))
-    print(f"  Načteno {len(packets)} vzorků × {sum(w for _,w,_ in SCHEMA_AQ)}B")
+    print(f"  Loaded {len(packets)} samples × {sum(w for _,w,_ in SCHEMA_AQ)}B")
     return packets, timestamps
 
 # ---------------------------------------------------------------------------
-# 4. USGS Earthquake — 8B paket
+# 4. USGS Earthquake — 8 B packet
 # ---------------------------------------------------------------------------
 
 def fetch_usgs_small(limit=10000):
-    print(f"\n[USGS small 8B] posledních 30 dní")
+    print(f"\n[USGS small 8B] last 30 days")
     url = "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_month.csv"
     try:
         r = SESSION.get(url, timeout=30); r.raise_for_status()
         lines = r.text.strip().split('\n')
     except Exception:
-        logging.warning("Chyba při stahování USGS", exc_info=True)
+        logging.warning("Failed to download USGS", exc_info=True)
         return [], []
     reader = csv.DictReader(lines)
     packets = []; timestamps = []
@@ -374,11 +374,11 @@ def fetch_usgs_small(limit=10000):
             if len(packets) >= limit: break
         except Exception:
             continue
-    print(f"  Načteno {len(packets)} vzorků × {sum(w for _,w,_ in SCHEMA_USGS)}B")
+    print(f"  Loaded {len(packets)} samples × {sum(w for _,w,_ in SCHEMA_USGS)}B")
     return packets, timestamps
 
 # ---------------------------------------------------------------------------
-# 5. NOAA Tides — 3B paket
+# 5. NOAA Tides — 3 B packet
 # ---------------------------------------------------------------------------
 
 NOAA_STATIONS = {
@@ -410,29 +410,29 @@ def fetch_noaa_small(station='8518750', limit=10000):
             data = r.json()
             if 'data' not in data: break
             for rec in data['data']:
-                v = safe(rec.get('v', 0)) * 1000   # výška m → mm
+                v = safe(rec.get('v', 0)) * 1000   # height m → mm
                 s = safe(rec.get('s', 0)) * 1000   # sigma m → mm
                 packets.append(pack_fields([v, s], SCHEMA_NOAA))
                 timestamps.append(rec.get('t', ''))
                 if len(packets) >= limit: break
             time.sleep(0.3)
         except Exception:
-            logging.warning(f"Chyba při stahování NOAA pro {station}", exc_info=True)
+            logging.warning(f"Failed to download NOAA for {station}", exc_info=True)
             break
         cur = nxt + timedelta(days=1)
-    print(f"  Načteno {len(packets)} vzorků × {sum(w for _,w,_ in SCHEMA_NOAA)}B")
+    print(f"  Loaded {len(packets)} samples × {sum(w for _,w,_ in SCHEMA_NOAA)}B")
     return packets, timestamps
 
 # ---------------------------------------------------------------------------
-# Hlavní spuštění
+# Entry point
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
     LIMIT = 10000
     print("=" * 70)
-    print("NIC DMD+ Small — minimální paket podle reálné přesnosti API")
+    print("NIC DMD+ Small — minimum packet width matching real API precision")
     print("=" * 70)
-    print(f"\nVýstup: {OUTPUT_DIR}/")
+    print(f"\nOutput: {OUTPUT_DIR}/")
     all_results = {}
 
     def process_fetch_result(fetch_tuple, name, schema):
@@ -445,21 +445,21 @@ if __name__ == "__main__":
                 save_source(pkts, ts, f"{name}.src.txt", schema)
                 all_results[name] = r
 
-    # DWD
+    # DWD — dataset names use the station name as-is (matches README tables)
     for sid in ['00691', '05792', '01975']:
         w = sum(x for _,x,_ in SCHEMA_DWD)
         name = f"DWD_{DWD_STATIONS[sid].split('(')[0].strip()}_{w}B"
         process_fetch_result(fetch_dwd_small(sid, LIMIT), name, SCHEMA_DWD)
         time.sleep(1)
 
-    # Forecast 13B (z původních 16B)
+    # Forecast 13B (down from original 16B)
     for city, lat, lon in FORECAST_LOCATIONS[:4]:
         w = sum(x for _,x,_ in SCHEMA_FORECAST_16B)
         name = f"Forecast_{city}_{w}B"
         process_fetch_result(fetch_forecast_small(lat, lon, city, LIMIT), name, SCHEMA_FORECAST_16B)
         time.sleep(0.5)
 
-    # Forecast 27B (z původních 32B)
+    # Forecast 27B (down from original 32B)
     for city, lat, lon in FORECAST_LOCATIONS[:2]:
         w = sum(x for _,x,_ in SCHEMA_FORECAST_32B)
         name = f"Forecast_{city}_{w}B_full"
@@ -485,11 +485,11 @@ if __name__ == "__main__":
         process_fetch_result(fetch_noaa_small(sid, LIMIT), name, SCHEMA_NOAA)
         time.sleep(1)
 
-    # Globální souhrn
+    # Global summary
     print(f"\n{'='*78}")
-    print("GLOBÁLNÍ SOUHRN — minimální schémata podle API přesnosti")
+    print("GLOBAL SUMMARY — minimum schemas per API precision")
     print(f"{'='*78}")
-    print(f"{'Dataset':<40} {'Pkt':>5} {'Šíř':>4} {'Komp/pkt':>9} {'Úspora%':>8} {'Err':>4}")
+    print(f"{'Dataset':<40} {'Pkts':>5} {'W':>4} {'Comp/pkt':>9} {'Saving%':>8} {'Err':>4}")
     print(f"{'-'*78}")
     for name, r in all_results.items():
         if not r: continue
@@ -500,5 +500,5 @@ if __name__ == "__main__":
         pct  = (1-comp/orig)*100 if orig > 0 else 0
         print(f"  {name:<38} {len(r):>5} {pkt_len:>3}B {comp/len(r):>8.2f}B {pct:>7.1f}% {errs:>4}")
     print(f"{'='*78}")
-    print(f"\nVýstupy v: {OUTPUT_DIR}/")
-    print("Hotovo!")
+    print(f"\nOutputs in: {OUTPUT_DIR}/")
+    print("Done!")
