@@ -47,7 +47,7 @@ DMD is designed for data that changes slowly and predictably over time — senso
 
 **C:** C99 or newer. Tested with GCC on PC (Linux/Windows) and AVR-GCC for ATmega328. No dependencies on standard library except `<string.h>`. Internal buffers are dimensioned using C99 VLA according to the actual packet length.
 
-**Arduino:** Copy `nic_dmd.c` and `nic_dmd.h` into your project folder. Compatible with Arduino IDE 1.8+ and 2.x (AVR-GCC supports C99 VLA).
+**Arduino:** Copy `c/nic_dmd.c` and `c/nic_dmd.h` into your project folder. Compatible with Arduino IDE 1.8+ and 2.x (AVR-GCC supports C99 VLA).
 
 **Note for other compilers:** IAR, Keil, and MSVC C++ do not support VLA. For these toolchains, you can define `-DDMD_PKT_MAX_BUILD=N` during compilation (e.g., 32 or 64) and the buffers will be fixed-size.
 
@@ -272,7 +272,7 @@ A negative number always means "something is wrong, do not use the data". The li
 If your compiler does not support C99 VLA (IAR, Keil, MSVC C++), define the maximum packet length at compilation:
 
 ```
-gcc -DDMD_PKT_MAX_BUILD=32 nic_dmd.c ...
+gcc -DDMD_PKT_MAX_BUILD=32 c/nic_dmd.c ...
 ```
 
 Buffers will be compiled to a fixed size of 32B. For projects with one fixed packet length (typical Arduino use case), this variant is ideal.
@@ -281,24 +281,33 @@ Buffers will be compiled to a fixed size of 32B. For projects with one fixed pac
 
 ## Files
 
-| File                 | Description                                         |
-| -------------------- | --------------------------------------------------- |
-| `nic_dmd.py`         | Python implementation — reference, for testing      |
-| `nic_dmd_utils.py`   | Helper functions — analysis and results output      |
-| `nic_dmd.c`          | C implementation for ATmega328                      |
-| `nic_dmd.h`          | Header file                                         |
-| `Makefile`           | Compilation and testing                             |
+The repository is organized into three directories by role:
+
+```
+c/        C implementation (embedded, ATmega328 / AVR-GCC)
+python/   Python reference implementation + its tests
+bench/    Benchmarks, data fetching and analysis tooling
+makefile  Builds the C library and runs both C and Python tests
+```
+
+| File                    | Description                                         |
+| ----------------------- | --------------------------------------------------- |
+| `python/nic_dmd.py`     | Python implementation — reference, for testing      |
+| `c/nic_dmd.c`           | C implementation for ATmega328                      |
+| `c/nic_dmd.h`           | Header file                                          |
+| `bench/nic_dmd_utils.py`| Helper functions — analysis and results output      |
+| `makefile`              | Compilation and testing                             |
 
 ### Testing and Benchmarking
 
-| File                  | Description                                                            |
-| --------------------- | ---------------------------------------------------------------------- |
-| `nic_dmd_test.py`     | Python tests — round-trip, weather, keyframe                           |
-| `nic_dmd_test.c`      | C tests — round-trip, all-zeros, weather                               |
-| `fetch_plus.py`       | Benchmark — real + synthetic data, uniform int16 (20 sources)          |
-| `fetch_small.py`      | Benchmark — same sources, schema-aware tight packing                   |
-| `fetch_raw_text.py`   | Benchmark — raw JSON/CSV text as bytes                                 |
-| `benchmark.py`        | Comparison of DMD vs Huffman vs Heatshrink                             |
+| File                      | Description                                                            |
+| ------------------------- | ---------------------------------------------------------------------- |
+| `python/nic_dmd_test.py`  | Python tests — round-trip, weather, keyframe                           |
+| `c/nic_dmd_test.c`        | C tests — round-trip, all-zeros, weather                               |
+| `bench/fetch_plus.py`     | Benchmark — real + synthetic data, uniform int16 (20 sources)          |
+| `bench/fetch_small.py`    | Benchmark — same sources, schema-aware tight packing                   |
+| `bench/fetch_raw_text.py` | Benchmark — raw JSON/CSV text as bytes                                 |
+| `bench/benchmark.py`      | Comparison of DMD vs Huffman vs Heatshrink                             |
 
 ---
 

@@ -15,10 +15,15 @@ Fallback: if compressed packet >= RAW → send RAW
 Dependencies: pip install requests heatshrink2
 """
 
+import os
 import struct, math, heapq, random, sys
 import requests
 import heatshrink2
 from collections import defaultdict
+
+# Allow running from the repo root: make the Python reference
+# implementation in ../python importable.
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "python"))
 
 from nic_dmd import (
     _delta_encode_zz,
