@@ -47,7 +47,7 @@ DMD je navržen pro data která se v čase mění pomalu a předvídatelně — 
 
 **C:** C99 nebo novější. Testováno s GCC na PC (Linux/Windows) a AVR-GCC pro ATmega328. Bez závislostí na standardní knihovně kromě `<string.h>`. Interní buffery jsou dimenzovány pomocí C99 VLA podle skutečné délky paketu.
 
-**Arduino:** Zkopíruj `nic_dmd.c` a `nic_dmd.h` do složky projektu. Kompatibilní s Arduino IDE 1.8+ a 2.x (AVR-GCC podporuje C99 VLA).
+**Arduino:** Zkopíruj `c/nic_dmd.c` a `c/nic_dmd.h` do složky projektu. Kompatibilní s Arduino IDE 1.8+ a 2.x (AVR-GCC podporuje C99 VLA).
 
 **Poznámka pro jiné překladače:** IAR, Keil a MSVC C++ VLA nepodporují. Pro tyto toolchainy lze při kompilaci definovat `-DDMD_PKT_MAX_BUILD=N` (např. 32 nebo 64) a buffery budou fixní.
 
@@ -435,7 +435,7 @@ Záporné číslo tedy vždy znamená „něco je špatně, data nepoužívej". 
 Pokud tvůj překladač nepodporuje C99 VLA (IAR, Keil, MSVC C++), definuj maximální délku paketu při kompilaci:
 
 ```
-gcc -DDMD_PKT_MAX_BUILD=32 nic_dmd.c ...
+gcc -DDMD_PKT_MAX_BUILD=32 c/nic_dmd.c ...
 ```
 
 Buffery se zkompilují na pevnou velikost 32B. Pro projekty s jednou pevnou délkou paketu (typický Arduino use case) je tato varianta ideální.
@@ -444,24 +444,33 @@ Buffery se zkompilují na pevnou velikost 32B. Pro projekty s jednou pevnou dél
 
 ## Soubory
 
-| Soubor               | Popis                                              |
-| -------------------- | -------------------------------------------------- |
-| `nic_dmd.py`         | Python implementace — referenční, pro testování    |
-| `nic_dmd_utils.py`   | Pomocné funkce — analýza a výpis výsledků          |
-| `nic_dmd.c`          | C implementace pro ATmega328                       |
-| `nic_dmd.h`          | Hlavičkový soubor                                  |
-| `Makefile`           | Kompilace a testování                              |
+Repozitář je rozdělený do tří adresářů podle role:
+
+```
+c/        C implementace (embedded, ATmega328 / AVR-GCC)
+python/   Python referenční implementace + její testy
+bench/    Benchmarky, stahování dat a nástroje pro analýzu
+makefile  Sestaví C knihovnu a spustí C i Python testy
+```
+
+| Soubor                  | Popis                                              |
+| ----------------------- | -------------------------------------------------- |
+| `python/nic_dmd.py`     | Python implementace — referenční, pro testování    |
+| `c/nic_dmd.c`           | C implementace pro ATmega328                       |
+| `c/nic_dmd.h`           | Hlavičkový soubor                                  |
+| `bench/nic_dmd_utils.py`| Pomocné funkce — analýza a výpis výsledků          |
+| `makefile`              | Kompilace a testování                              |
 
 ### Testování a benchmark
 
-| Soubor                | Popis                                                              |
-| --------------------- | ------------------------------------------------------------------ |
-| `nic_dmd_test.py`     | Python testy — round-trip, meteo, keyframe                         |
-| `nic_dmd_test.c`      | C testy — round-trip, all-zeros, meteo                             |
-| `fetch_plus.py`       | Benchmark — reálná + syntetická data, uniformní int16 (20 zdrojů)  |
-| `fetch_small.py`      | Benchmark — stejné zdroje, schema-aware tight packing              |
-| `fetch_raw_text.py`   | Benchmark — surový JSON/CSV text jako bajty                        |
-| `benchmark.py`        | Srovnání DMD vs Huffman vs Heatshrink                              |
+| Soubor                    | Popis                                                              |
+| ------------------------- | ------------------------------------------------------------------ |
+| `python/nic_dmd_test.py`  | Python testy — round-trip, meteo, keyframe                         |
+| `c/nic_dmd_test.c`        | C testy — round-trip, all-zeros, meteo                             |
+| `bench/fetch_plus.py`     | Benchmark — reálná + syntetická data, uniformní int16 (20 zdrojů)  |
+| `bench/fetch_small.py`    | Benchmark — stejné zdroje, schema-aware tight packing              |
+| `bench/fetch_raw_text.py` | Benchmark — surový JSON/CSV text jako bajty                        |
+| `bench/benchmark.py`      | Srovnání DMD vs Huffman vs Heatshrink                              |
 
 ---
 

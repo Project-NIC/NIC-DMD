@@ -11,7 +11,15 @@ NIC — Native Intellect Community
 https://github.com/Project-NIC
 """
 
+import os
+import sys
+
 from collections import Counter
+
+# Allow running the benchmark tooling from the repo root: make the
+# Python reference implementation in ../python importable.
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "python"))
+
 from nic_dmd import (
     dmd_compress, dmd_decompress,
     _parse_header, DELTA_NONE, DMD_KEYFRAME_EVERY,
