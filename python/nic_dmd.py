@@ -42,7 +42,7 @@ NIC — Native Intellect Community
 https://github.com/Project-NIC
 """
 
-__version__ = "0.1.0"
+__version__ = "1.0.0"
 
 # ---------------------------------------------------------------------------
 # Constants — match the #define values in the C header
